@@ -58,7 +58,6 @@
 ### 🔍 环境要求
 
 - Python 3.10+
-- 必要的Python包（在requirements.txt中列出）
 
 ### ▶️ 启动服务
 
