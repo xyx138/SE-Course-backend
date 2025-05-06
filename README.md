@@ -97,7 +97,7 @@
 
 5. 修改配置文件
 
-   将`.env.example` 文件中的api改为自己的，项目路径改为自己的，创建api可以参考下面的文档
+   复制`.env.example`到同级目录下，并更名为`.env`, 将其中的**api和项目路径**改为自己的，创建api可以参考下面的文档
 
    ![image-20250506143814101](https://raw.githubusercontent.com/xyx138/cloudimg/master/img/image-20250506143814101.png)
 
