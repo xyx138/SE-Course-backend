@@ -22,7 +22,7 @@ logger = MyLogger(log_file="logs/app.log", level=logging.INFO)
 class Agent():
     '''agent = llm+tool'''
     
-    def __init__(self, api_key:str , base_url:str , model: str = None, label: str = 'public') -> None:
+    def __init__(self, api_key:str , base_url:str , model: str = None, label: str = None) -> None:
         '''初始化 llm 客户端和 mcp 客户端'''
 
         logger.info("初始化LLM和MCP客户端")
@@ -37,7 +37,7 @@ class Agent():
             self.mcp_clients[server_name] = MCPClient(command, args)
 
         self.retriever = Retriever(similarity_threshold=0.5)
-        self.label = label
+        self.label = None
 
     async def update_label(self, label: str):
         '''
@@ -57,7 +57,11 @@ class Agent():
 
         all_text = [f"{message['role']}: {message['content']}" for message in self.llmClient.messages]
         all_text = '\n'.join(all_text)
-        with open(f"{PROJECT_PATH}/src/logs/messages.json", "w") as f:
+
+        log_messages_dir = f"{PROJECT_PATH}/logs"
+        os.makedirs(log_messages_dir, exist_ok=True)
+        log_messages_file = f"{log_messages_dir}/messages.json"
+        with open(log_messages_file, "w") as f:
             f.write(all_text)
             
 
