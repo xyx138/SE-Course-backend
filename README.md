@@ -79,6 +79,24 @@ PROJECT_PATH=<项目根目录路径>
 ## 使用方法
 
 ### 启动服务
+
+1. 安装uv
+
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh  # linux/mac
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"  # windows
+   ```
+
+   重启终端，确保 uv 命令生效
+
+2. 进入项目根目录，创建虚拟环境
+
+   ```bash
+   
+   ```
+
+   
+
 ```bash
 python src/main.py
 ```
@@ -139,18 +157,4 @@ agent/
 - similarity_threshold：相似度阈值
 - chunk_cnt：返回的文档块数量
 
-## 许可证
 
-[许可证信息]
-
-## 贡献指南
-
-[贡献指南]
-
-## 致谢
-
-感谢所有为本项目做出贡献的开发者。
-
----
-
-希望这个智能Agent系统能够帮助您更高效地处理信息和执行任务！

@@ -15,7 +15,7 @@ VectorStore/
 
 test/
 
-pyproject.toml
+# pyproject.toml
 uv.lock
 .python-version
 .env
