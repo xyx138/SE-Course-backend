@@ -86,7 +86,7 @@
 
 4. 安装 node （以windows为例，如果安装过node跳过这步）
 
-   访问[node官网](https://nodejs.org/en)，选择下载msi文件，点击msi文件后一路即可
+   访问[node官网](https://nodejs.org/en)，选择下载msi文件，点击msi文件后一路下一步即可
 
    ```bash
    # 验证是否安装成功
