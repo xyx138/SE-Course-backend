@@ -1,0 +1,28 @@
+{
+    "mcpServers": {
+        "fetch": {
+            "command": "uvx",
+            "args": ["mcp-server-fetch", "--ignore-robots-txt"]
+        },
+        "filesystem": {
+            "command": "npx",
+            "args": [
+              
+              "-y",
+              "@modelcontextprotocol/server-filesystem",
+              "${PROJECT_PATH}"
+            
+            ]
+        },
+        "amap-maps": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@amap/amap-maps-mcp-server"
+            ],
+            "env": {
+                "AMAP_MAPS_API_KEY":"${AMAP_MAPS_API_KEY}"
+            }
+        }
+    }
+}
