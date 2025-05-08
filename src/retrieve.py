@@ -25,6 +25,8 @@ class Retriever:
         self.similarity_threshold = similarity_threshold
 
     def retrieve(self, query: str, label: str = None):
+
+        print(f"检索的标签为：{label}")
         if label is None:
             return ""
 
@@ -33,6 +35,8 @@ class Retriever:
             similarity_top_k=5,
         )
 
+        print(f"index为：{index}")    
+    
         retrieve_chunk = retriever.retrieve(query)
         print(f"原始chunk为：{retrieve_chunk}")
         try:

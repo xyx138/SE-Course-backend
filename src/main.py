@@ -354,7 +354,7 @@ with gr.Blocks(
     
     with gr.Tabs() as tabs:
         # 聊天标签页 - 美化版
-        with gr.TabItem("💬 聊天", id="chat_tab"):
+        with gr.TabItem("💬 聊天", id="chat_tab") as chat_tab:
             # 主要内容区域
             with gr.Row(equal_height=True):
                 # 左侧聊天区域 (占据更多空间)
@@ -363,8 +363,8 @@ with gr.Blocks(
                     chatbot = gr.Chatbot(
                         height=600, 
                         type="messages",
-                        avatar_images=(f"{PROJECT_ROOT}/images/user.png", 
-                                     f"{PROJECT_ROOT}/images/bot.jpg"),
+                        avatar_images=(f"{PROJECT_ROOT}/images/logo_user.png", 
+                                     f"{PROJECT_ROOT}/images/logo_agent.png"),
                         elem_id="chatbot"
                     )
                     
@@ -391,7 +391,7 @@ with gr.Blocks(
                     with gr.Group(elem_id="kb_selector"):
                         gr.Markdown("### 📚 知识库选择")
                         with gr.Row():
-                            kb_name = gr.Dropdown(
+                            kb_name_dropdown = gr.Dropdown(
                                 label="当前知识库",
                                 choices=list_knowledge_bases(),
                                 value=None,
@@ -400,7 +400,7 @@ with gr.Blocks(
                                 elem_id="kb_dropdown"
                             )
                             select_kb_btn = gr.Button("选择", variant="primary", size="sm", scale=1)
-                    
+
                     gr.Markdown("### 🔍 功能介绍", elem_id="features_title")
                     with gr.Group(elem_id="features_group"):
                         gr.Markdown("""
@@ -429,9 +429,9 @@ with gr.Blocks(
             def use_example(example):
                 return example
                 
-            example_btn1.click(use_example, [gr.State("什么是机器学习?")], [msg])
-            example_btn2.click(use_example, [gr.State("帮我整理一份周报")], [msg])
-            example_btn3.click(use_example, [gr.State("如何使用知识库?")], [msg])
+            example_btn1.click(use_example, [gr.State("爬取豆瓣评分前10的电影")], [msg])
+            example_btn2.click(use_example, [gr.State("当前项目包含哪些目录文件")], [msg])
+            example_btn3.click(use_example, [gr.State("从北京科技大学到天安门的路线规划")], [msg])
             
             # 消息处理功能
             def user_message(user_message, history):
@@ -463,11 +463,13 @@ with gr.Blocks(
             
             clear_btn.click(clear_chat, None, chatbot, queue=False)
             
-            select_kb_btn.click(select_knowledge_base, [kb_name], [system_status])
+            select_kb_btn.click(select_knowledge_base, [kb_name_dropdown], [system_status])
 
-        # 知识库管理标签页 - 美化版
-        with gr.TabItem("📚 知识库管理", id="kb_tab"):
-            with gr.Row():
+
+
+        # 知识库管理标签页 - 美化版 
+        with gr.TabItem("📚 知识库管理", id="kb_tab"):  
+            with gr.Row():  
                 # 左侧知识库管理功能
                 with gr.Column(scale=3, elem_id="kb_management"):
                     # 创建/更新知识库
@@ -577,8 +579,12 @@ with gr.Blocks(
                 list_knowledge_bases,
                 inputs=[],
                 outputs=kb_list
-    )
+            )
 
+    chat_tab.select(
+    fn=lambda: gr.update(choices=list_knowledge_bases()),  # 使用gr.update()
+    outputs=kb_name_dropdown
+)
 
 if __name__ == "__main__":
     # 启动Agent线程

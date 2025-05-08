@@ -45,7 +45,9 @@ class VectorStore:
         print(f"向量数据库创建成功，路径为{db_path}")
     
     def load_index(self, label: str):
+
         db_path = os.path.join(self.index_path, label)
+        print(f"向量数据库路径为：{db_path}")
         if not os.path.exists(db_path):
             raise ValueError(f"向量数据库路径不存在: {db_path}")
         index = load_index_from_storage(
