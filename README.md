@@ -58,7 +58,6 @@
 ### 🔍 环境要求
 
 - Python 3.10+
-- 必要的Python包（在requirements.txt中列出）
 
 ### ▶️ 启动服务
 
@@ -87,7 +86,7 @@
 
 4. 安装 node （以windows为例，如果安装过node跳过这步）
 
-   访问[node官网](https://nodejs.org/en)，选择下载msi文件，点击msi文件后一路即可
+   访问[node官网](https://nodejs.org/en)，选择下载msi文件，点击msi文件后一路下一步即可
 
    ```bash
    # 验证是否安装成功
@@ -97,7 +96,7 @@
 
 5. 修改配置文件
 
-   将`.env.example` 文件中的api改为自己的，项目路径改为自己的，创建api可以参考下面的文档
+   复制`.env.example`到同级目录下，并更名为`.env`, 将其中的**api和项目路径**改为自己的，创建api可以参考下面的文档
 
    ![image-20250506143814101](https://raw.githubusercontent.com/xyx138/cloudimg/master/img/image-20250506143814101.png)
 
