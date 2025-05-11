@@ -7,7 +7,8 @@ import time
 from pathlib import Path
 import json
 import shutil
-
+import httpx
+import requests
 # 导入你的 Agent 相关模块
 from agent import Agent
 from retrieve import Retriever
@@ -15,161 +16,247 @@ from vectorStore import VectorStore
 
 # 加载环境变量
 load_dotenv()
-api_key = os.getenv("DASHSCOPE_API_KEY")
-base_url = os.getenv("DASHSCOPE_BASE_URL")
-model = 'qwen-plus'
 
-# 确保必要的目录存在
-KNOWLEDGE_DIR = os.path.join(os.getenv("PROJECT_PATH"), "knowledge_base")
-VECTOR_STORE_DIR = os.path.join(os.getenv("PROJECT_PATH"), "VectorStore")
+PROJECT_PATH = os.getenv("PROJECT_PATH")
 
-PROJECT_ROOT = os.getenv("PROJECT_PATH")
+examples = [
+    "爬取豆瓣评分前10的电影，并写入到movies.txt文件中？",
+    "从北京到天津的路径规划？",
+    "今天北京的天气怎么样？"
+]
 
-os.makedirs(KNOWLEDGE_DIR, exist_ok=True)
-os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
-
-# 全局变量
-agent = None
-agent_lock = threading.Lock()
-agent_ready = threading.Event()
-retriever = Retriever(similarity_threshold=0.7)
-
-# 在全局范围创建事件循环
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
-
-
-# 启动 Agent 的异步任务
-async def start_agent():
-    global agent
-    try:
-        agent = Agent(api_key, base_url, model)
-        await agent.setup()
-        agent_ready.set()
-        print("Agent 初始化完成")
-    except Exception as e:
-        print(f"Agent 初始化失败: {e}")
-        agent = None
-
-# 在后台线程中启动 Agent
-def background_start_agent():
-    global loop
-    loop.run_until_complete(start_agent())
-
-# 发送消息给 Agent 并获取回复
-# 发送消息给 Agent 并获取回复
+# 修改为使用HTTP请求的版本
 async def send_message_to_agent(message):
-    if not agent or not agent_ready.is_set():
-        return "Agent 尚未准备好，请稍后再试"
+    """
+    向后端API发送聊天消息的请求
+    
+    Args:
+        message: 用户输入的消息
+    
+    Returns:
+        str: 获取到的AI回复
+    """
+    try:
+        # API端点和参数配置
+        api_url = "http://localhost:8000/chat"
+
+        data = {
+            "message": message
+        }
         
-    try:    
-        # 调用 Agent 并确保返回非 None 值
-        if hasattr(agent, 'chat'):
-            response = await agent.chat(message)
-            # 检查并处理返回值类型
-            if response is None:
-                return "Agent 返回了空回复"
-            elif isinstance(response, str):
-                return response
-            else:
-                # 尝试将非字符串类型转换为字符串
-                try:
-                    return str(response)
-                except:
-                    return "无法处理 Agent 返回的非字符串格式回复"
-        else:
-            return "Agent 对象没有 chat 方法"
+        timeout = httpx.Timeout(10000.0, connect=5.0)
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                api_url,
+
+                data=data
+            )
             
+            # 检查响应状态
+            if response.status_code == 200:
+                result = response.json()
+                if "message" in result:
+                    return result["message"]
+                else:
+                    return str(result)
+            else:
+                return f"请求失败，状态码: {response.status_code}, 原因: {response.text}"
+                
+    except httpx.RequestError as e:
+        # 处理网络错误
+        return f"网络请求错误: {str(e)}"
     except Exception as e:
-        print(f"处理消息时出错: {e}")
+        # 处理其他未知错误
         return f"处理消息时出错: {str(e)}"
 
 # 创建或更新知识库
 async def create_or_update_knowledge_base(files, name):
-    if not name:
-        return "请提供知识库名称"
+    """
+    创建或更新知识库
     
-    # 创建知识库目录
-    kb_dir = os.path.join(KNOWLEDGE_DIR, name)
-    os.makedirs(kb_dir, exist_ok=True)
-    
-    # 保存上传的文件
-    file_paths = []
-    for file in files:
-        dest_path = os.path.join(kb_dir, os.path.basename(file.name))
-        shutil.copy(file.name, dest_path)
-        file_paths.append(dest_path)
-    
-    # 创建向量存储
+    Args:
+        files: 上传的文件列表
+        name: 知识库名称
+        
+    Returns:
+        str: 操作结果消息
+    """
     try:
-        # vector_store = VectorStore(index_path=VECTOR_STORE_DIR)
-        # vector_store.create_index(file_path=kb_dir, label=name)
-        await agent.create_index(files_dir=kb_dir, label=name)
-        return f"成功创建/更新知识库: {name}，包含 {len(file_paths)} 个文件"
+        # API端点
+        api_url = "http://localhost:8000/create_or_update_index"
+        
+        # 准备文件数据，转换为与api_test相同的格式
+        file_tuples = []
+        for file in files:
+            file_name = os.path.basename(file.name)
+            # 以二进制模式打开文件
+            file_content = open(file.name, "rb")
+            # 构建文件元组：(表单字段名, (文件名, 文件内容))
+            file_tuples.append(("files", (file_name, file_content)))
+        
+        # 准备表单数据
+        form_data = {"name": name}
+
+        # 设置超时，避免长时间等待
+        timeout = httpx.Timeout(10000.0, connect=5.0)
+
+
+        # 在线程池中执行请求      
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                api_url,
+                files=file_tuples,
+                data=form_data
+            )
+        
+            # 处理响应
+            if response.status_code == 200:
+                result = response.json()
+                if "message" in result:
+                    return result["message"]
+                else:
+                    return str(result)
+            else:
+                return f"请求失败，状态码: {response.status_code}, 原因: {response.text}"
+            
     except Exception as e:
-        return f"创建向量存储时出错: {str(e)}"
+        return f"创建或更新知识库时出错: {str(e)}"
+    
 
 # 删除知识库
-def delete_knowledge_base(name):
-    if not name:
-        return "请提供知识库名称"
+async def delete_knowledge_base(name):
+    try:
+        # API端点和参数配置
+        api_url = "http://localhost:8000/delete_knowledge_base"
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        data = {
+            "name": name
+        }
+        
+        # 设置超时，避免长时间等待
+        timeout = httpx.Timeout(30.0, connect=5.0)
+        
+        # 发送异步HTTP请求
+        async with httpx.AsyncClient(timeout=timeout) as client:    
+            response = await client.post(
+                api_url,
+                headers=headers,
+                data=data
+            )
+            
+        # 检查响应状态
+        if response.status_code == 200:
+            result = response.json()
+            if "message" in result:
+                return result["message"]
+            else:
+                return str(result)
+        else:
+            return f"请求失败，状态码: {response.status_code}, 原因: {response.text}"
+                
+    except httpx.RequestError as e:
+        # 处理网络错误
+        return f"网络请求错误: {str(e)}"
+    except httpx.TimeoutException:
+        # 处理超时错误
+        return "请求超时，请稍后再试"
+    except Exception as e:
+        # 处理其他未知错误
+        return f"处理消息时出错: {str(e)}"
     
-    kb_dir = os.path.join(KNOWLEDGE_DIR, name)
-    vs_dir = os.path.join(VECTOR_STORE_DIR, name)
-    
-    result = []
-    
-    # 删除知识库文件
-    if os.path.exists(kb_dir):
-        try:
-            shutil.rmtree(kb_dir)
-            result.append(f"已删除知识库文件夹: {kb_dir}")
-        except Exception as e:
-            result.append(f"删除知识库文件夹失败: {str(e)}")
-    
-    # 删除向量存储
-    if os.path.exists(vs_dir):
-        try:
-            shutil.rmtree(vs_dir)
-            result.append(f"已删除向量存储: {vs_dir}")
-        except Exception as e:
-            result.append(f"删除向量存储失败: {str(e)}")
-    
-    if not result:
-        return f"未找到知识库: {name}"
-    
-    return "\n".join(result)
 
 # 列出所有知识库
-def list_knowledge_bases():
-    kbs = os.listdir(KNOWLEDGE_DIR) if os.path.exists(KNOWLEDGE_DIR) else []
-    if not kbs:
-        return "没有找到知识库"
-    
-    return kbs
+async def list_knowledge_bases():
+    try:
+        url = "http://localhost:8000/list_knowledge_bases"
+        # 异步
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+            result = response.json()
+            if "knowledge_bases" in result:
+                return result["knowledge_bases"]
+            else:
+                return str(result)
+    except Exception as e:
+        return f"获取知识库列表时出错: {str(e)}"
+
+# 选择知识库
+async def select_knowledge_base(kb_name):
+    try:
+        url = "http://localhost:8000/update_label"
+        data = {"name": kb_name}
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, data=data)
+            result = response.json()
+            if "message" in result:
+                return result["message"]
+            else:
+                return str(result)
+    except Exception as e:
+        return f"选择知识库时出错: {str(e)}"
+
+
 
 
 # 修改处理聊天消息的函数
-def process_message(message, history):
+async def process_message(message, history):
     if not message or not message.strip():
         return "请输入有效的消息"
         
     print(f"处理消息: {message}")
     try:
-        response = loop.run_until_complete(send_message_to_agent(message))
+        # 异步
+        response =  await send_message_to_agent(message)
         print(f"收到回复: {response[:100]}...")
         return response
     except Exception as e:
         print(f"处理消息时出错: {e}")
         return f"处理消息时出错: {str(e)}"
 
-# 选择知识库
-def select_knowledge_base(kb_name):
-    global agent
-    if agent:
-        response = loop.run_until_complete( agent.update_label(kb_name) )
-    return f"选择知识库：{kb_name}"
+
+# 消息处理功能
+def user_message(user_message, history):
+    if not user_message:
+        return "", history
+    return "", history + [{"role": "user", "content": user_message}]
+
+async def bot_message(history):
+    try:
+        user_message = history[-1]["content"]
+        # 异步
+        bot_message = await process_message(user_message, history[:-1])
+        return history + [{"role": "assistant", "content": bot_message}]
+    except Exception as e:
+        print(f"处理消息时出错: {e}")
+        return history + [{"role": "assistant", "content": f"处理消息时出错: {str(e)}"}]
+
+# 清空聊天
+def clear_chat():
+    return None
+
+async def refresh_knowledge_bases():
+    kb_list = await list_knowledge_bases()
+    return gr.update(choices=kb_list)
+
+async def refresh_delete_knowledge_bases():
+    kb_list = await list_knowledge_bases()
+    return gr.update(choices=kb_list)
+
+async def display_knowledge_bases():
+    kb_list = await list_knowledge_bases()
+    
+    text = ""
+    for kb in kb_list:
+        text += f"{kb}\n"
+    return text
+
+
+async def init_knowledge_bases():
+    kb_list = await list_knowledge_bases()
+    return gr.update(choices=kb_list), gr.update(choices=kb_list), await display_knowledge_bases()
 
 
 # 创建 Gradio 界面 - 优化样式版本
@@ -239,6 +326,21 @@ with gr.Blocks(
         border-radius: 18px 18px 18px 4px;
         padding: 10px 15px;
         margin: 8px;
+    }
+    
+    /* 修复头像大小与圆形边框不匹配问题 */
+    #chatbot .message-avatar {
+        width: 40px !important;
+        height: 40px !important;
+        border-radius: 50% !important;
+        overflow: hidden !important;
+    }
+    
+    #chatbot .message-avatar img {
+        width: 100% !important;
+        height: 100% !important;
+        object-fit: cover !important;
+        object-position: center !important;
     }
     
     /* 输入区域 */
@@ -350,7 +452,7 @@ with gr.Blocks(
     """
 ) as app:   
     gr.Markdown("# 🤖 智能 Agent 助手", elem_id="title")
-    gr.Markdown("### 基于大型语言模型和知识库的智能问答系统", elem_id="subtitle")
+    gr.Markdown("### 基于大型语言模型和知识库的智能问答系统", elem_id="subtitle") 
     
     with gr.Tabs() as tabs:
         # 聊天标签页 - 美化版
@@ -363,8 +465,8 @@ with gr.Blocks(
                     chatbot = gr.Chatbot(
                         height=600, 
                         type="messages",
-                        avatar_images=(f"{PROJECT_ROOT}/images/logo_user.png", 
-                                     f"{PROJECT_ROOT}/images/logo_agent.png"),
+                        avatar_images=(f"{PROJECT_PATH}/images/logo_user.png", 
+                                     f"{PROJECT_PATH}/images/logo_agent.png"),
                         elem_id="chatbot"
                     )
                     
@@ -377,7 +479,8 @@ with gr.Blocks(
                             show_label=False,
                             elem_id="message_box",
                             container=False,
-                            scale=5
+                            scale=5,
+                            autofocus=True,  # 页面加载时自动聚焦到输入框
                         )
                         
                         # 按钮组 - 水平排列
@@ -393,7 +496,7 @@ with gr.Blocks(
                         with gr.Row():
                             kb_name_dropdown = gr.Dropdown(
                                 label="当前知识库",
-                                choices=list_knowledge_bases(),
+                                choices=[],
                                 value=None,
                                 interactive=True,
                                 scale=3,
@@ -412,9 +515,9 @@ with gr.Blocks(
                     
                     gr.Markdown("### 💡 示例问题", elem_id="examples_title")
                     with gr.Group(elem_id="examples_group"):
-                        example_btn1 = gr.Button("帮我爬取豆瓣评分前10的电影", size="sm", elem_id="example1")
-                        example_btn2 = gr.Button("当前项目包含哪些目录文件", size="sm", elem_id="example2")
-                        example_btn3 = gr.Button("从北京科技大学到天安门的路线规划", size="sm", elem_id="example3")
+                        example_btn1 = gr.Button(examples[0], size="sm", elem_id="example1")
+                        example_btn2 = gr.Button(examples[1], size="sm", elem_id="example2")
+                        example_btn3 = gr.Button(examples[2], size="sm", elem_id="example3")
 
                     # 状态显示
                     with gr.Accordion("系统状态", open=True, elem_id="status_accordion"):
@@ -429,28 +532,11 @@ with gr.Blocks(
             def use_example(example):
                 return example
                 
-            example_btn1.click(use_example, [gr.State("爬取豆瓣评分前10的电影")], [msg])
-            example_btn2.click(use_example, [gr.State("当前项目包含哪些目录文件")], [msg])
-            example_btn3.click(use_example, [gr.State("从北京科技大学到天安门的路线规划")], [msg])
+            example_btn1.click(use_example, [gr.State(examples[0])], [msg])
+            example_btn2.click(use_example, [gr.State(examples[1])], [msg])
+            example_btn3.click(use_example, [gr.State(examples[2])], [msg])
             
-            # 消息处理功能
-            def user_message(user_message, history):
-                if not user_message:
-                    return "", history
-                return "", history + [{"role": "user", "content": user_message}]
-            
-            def bot_message(history):
-                try:
-                    user_message = history[-1]["content"]
-                    bot_message = process_message(user_message, history[:-1])
-                    return history + [{"role": "assistant", "content": bot_message}]
-                except Exception as e:
-                    print(f"处理消息时出错: {e}")
-                    return history + [{"role": "assistant", "content": f"处理消息时出错: {str(e)}"}]
-            
-            # 清空聊天
-            def clear_chat():
-                return None
+
             
             # 绑定事件
             msg.submit(user_message, [msg, chatbot], [msg, chatbot], queue=False).then(
@@ -468,7 +554,7 @@ with gr.Blocks(
 
 
         # 知识库管理标签页 - 美化版 
-        with gr.TabItem("📚 知识库管理", id="kb_tab"):  
+        with gr.TabItem("📚 知识库管理", id="kb_tab") as kb_tab:  
             with gr.Row():  
                 # 左侧知识库管理功能
                 with gr.Column(scale=3, elem_id="kb_management"):
@@ -505,7 +591,7 @@ with gr.Blocks(
                         with gr.Row():
                             delete_kb_name = gr.Dropdown(
                                 label="要删除的知识库名称",
-                                choices=list_knowledge_bases(),
+                                choices=[],
                                 value=None,
                                 interactive=True,
                                 scale=3,
@@ -518,15 +604,7 @@ with gr.Blocks(
                                 scale=1,
                                 elem_id="delete_kb_btn"
                             )
-                    
-                    # 知识库列表
-                    with gr.Group(elem_id="list_kb_group"):
-                        gr.Markdown("## 📋 知识库列表")
-                        list_kb_btn = gr.Button(
-                            "刷新知识库列表", 
-                            size="sm", 
-                            elem_id="list_kb_btn"
-                        )
+                
                 
                 # 右侧状态和知识库列表
                 with gr.Column(scale=2, elem_id="kb_status_column"):
@@ -545,7 +623,6 @@ with gr.Blocks(
                             label="知识库列表", 
                             interactive=False, 
                             lines=10,
-                            placeholder="点击「刷新知识库列表」按钮查看所有知识库",
                             elem_id="kb_list_text"
                         )
                     
@@ -557,42 +634,49 @@ with gr.Blocks(
                         1. **创建知识库**：输入名称并上传文件，点击创建按钮
                         2. **更新知识库**：使用已存在的知识库名称，上传新文件
                         3. **删除知识库**：输入名称并点击删除按钮
-                        4. **查看列表**：点击刷新按钮查看所有知识库
                         
                         支持的文件格式：TXT、PDF、DOC、DOCX、MD
                         """)
             
+
+
             # 绑定知识库管理功能
             create_kb_btn.click(
-                lambda x, y: loop.run_until_complete(create_or_update_knowledge_base(x, y)),
+                create_or_update_knowledge_base,
                 inputs=[kb_files, kb_name],
                 outputs=kb_status
+            ).then(
+                fn=init_knowledge_bases,
+                outputs=[kb_name_dropdown, delete_kb_name, kb_list]
             )
             
             delete_kb_btn.click(
                 delete_knowledge_base,
                 inputs=[delete_kb_name],
                 outputs=kb_status
+            ).then(
+                fn=init_knowledge_bases,
+                outputs=[kb_name_dropdown, delete_kb_name, kb_list]
             )
             
-            list_kb_btn.click(
-                list_knowledge_bases,
-                inputs=[],
-                outputs=kb_list
-            )
 
     chat_tab.select(
-    fn=lambda: gr.update(choices=list_knowledge_bases()),  # 使用gr.update()
-    outputs=kb_name_dropdown
-)
+        fn=refresh_knowledge_bases,  
+        outputs=kb_name_dropdown
+    )
+    
+    kb_tab.select(
+        fn=refresh_knowledge_bases,
+        outputs=delete_kb_name
+    )
+
+    app.load(
+        fn=init_knowledge_bases,
+        outputs=[kb_name_dropdown, delete_kb_name, kb_list],
+        queue=False
+    )
 
 if __name__ == "__main__":
-    # 启动Agent线程
-    threading.Thread(target=background_start_agent, daemon=True).start()
-    
-    # 等待agent初始化
-    time.sleep(2)
-    
     # 启动Gradio应用
     app.launch(
         share=False,

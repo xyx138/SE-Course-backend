@@ -60,7 +60,7 @@ class MCPClient:
                 logger.error(f"连接服务器失败: {e}")
                 raise
 
-    async def call_tool(self, tool_name: str, args: dict, timeout=30):
+    async def call_tool(self, tool_name: str, args: dict):
         if not self.session or not self._connected:
             raise RuntimeError("未连接到服务器")
         if tool_name not in self.tool_names:
@@ -69,23 +69,7 @@ class MCPClient:
         
         logger.info(f"调用工具 {tool_name}，参数: {args}")
         
-        # 添加超时处理
-        try:
-            # 使用 asyncio.wait_for 添加超时
-            return await asyncio.wait_for(
-                self.session.call_tool(tool_name, args),
-                timeout=timeout
-            )
-        except asyncio.TimeoutError:
-            logger.error(f"调用工具 {tool_name} 超时 (>{timeout}秒)")
-            return type('ToolResponse', (), {
-                'content': f"工具调用超时: {tool_name} 操作耗时过长，已自动中断。请检查工具服务是否正常。"
-            })
-        except Exception as e:
-            logger.error(f"调用工具 {tool_name} 时出错: {e}")
-            return type('ToolResponse', (), {
-                'content': f"工具调用出错: {str(e)}"
-            })
+        return await self.session.call_tool(tool_name, args)
 
     def have_tool(self, tool_name: str) -> bool:
         return tool_name in self.tool_names

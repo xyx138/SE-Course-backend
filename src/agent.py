@@ -134,31 +134,55 @@ class Agent():
                     if target_client:
                         print(f"调用{name}，参数为{args}")
                         try:
-                            # 添加超时处理
-                            tool_res = await asyncio.wait_for(
-                                target_client.call_tool(name, args),
-                                timeout=30.0
-                            )
+                            # 检查客户端连接状态，如果需要则重新连接
+                            if not target_client._connected or target_client.session is None:
+                                logger.warning(f"检测到客户端未连接或会话为空，尝试重新连接")
+                                await target_client.connect_to_server()
+                                
+                            # 调用工具
+                            tool_res = await target_client.call_tool(name, args)  
                             print(f"调用{name}的执行结果为{tool_res}")
                             await self.llmClient.add_tool_call(
                                 role="tool", 
                                 content=tool_res.content, 
                                 tool_call_id=tool_call.id
                             )
-                        except asyncio.TimeoutError:
-                            print(f"工具{name}调用超时")
-                            await self.llmClient.add_tool_call(
-                                role="tool", 
-                                content=f"工具{name}调用超时", 
-                                tool_call_id=tool_call.id
-                            )
                         except Exception as e:
                             print(f"工具{name}调用出错: {e}")
-                            await self.llmClient.add_tool_call(
-                                role="tool", 
-                                content=f"工具{name}调用出错: {str(e)}", 
-                                tool_call_id=tool_call.id
-                            )
+                            # 如果是事件循环关闭错误，尝试重新连接所有客户端
+                            if "Event loop is closed" in str(e):
+                                print("检测到事件循环关闭错误，尝试重新连接所有客户端")
+                                try:
+                                    await self.reconnect_all_clients()
+                                    # 重试工具调用
+                                    try:
+                                        tool_res = await target_client.call_tool(name, args)
+                                        print(f"重新连接后调用{name}的执行结果为{tool_res}")
+                                        await self.llmClient.add_tool_call(
+                                            role="tool", 
+                                            content=tool_res.content, 
+                                            tool_call_id=tool_call.id
+                                        )
+                                    except Exception as retry_e:
+                                        print(f"重试调用工具{name}失败: {retry_e}")
+                                        await self.llmClient.add_tool_call(
+                                            role="tool", 
+                                            content=f"工具{name}调用出错: {str(retry_e)}", 
+                                            tool_call_id=tool_call.id
+                                        )
+                                except Exception as reconnect_e:
+                                    print(f"重新连接客户端失败: {reconnect_e}")
+                                    await self.llmClient.add_tool_call(
+                                        role="tool", 
+                                        content=f"工具{name}调用出错: 事件循环已关闭且无法重新连接 - {str(e)}", 
+                                        tool_call_id=tool_call.id
+                                    )
+                            else:
+                                await self.llmClient.add_tool_call(
+                                    role="tool", 
+                                    content=f"工具{name}调用出错: {str(e)}", 
+                                    tool_call_id=tool_call.id
+                                )
 
                 res = await self.llmClient.chat(message=None, tools=self.tools)
                 tool_calls = res.choices[0].message.tool_calls if res.choices[0].message.tool_calls else None
@@ -169,6 +193,13 @@ class Agent():
         except Exception as e:
             logger.error(f"聊天过程中出错: {e}")
             return f"处理请求时出错: {str(e)}"
+
+    async def delete_index(self, label: str):
+        res = self.retriever.delete_index(label)
+        if res == 1:
+            logger.info(f"删除向量索引成功，索引标签为{label}")
+        else:
+            logger.error(f"删除向量索引失败: {res}")
 
 
     async def create_index(self, files_dir: str, label: str):
@@ -195,23 +226,28 @@ class Agent():
             except Exception as e:
                 logger.error(f"清理客户端 {name} 时出错: {e}")
 
+    async def reconnect_all_clients(self):
+        """尝试重新连接所有MCP客户端"""
+        for name, client in self.mcp_clients.items():
+            try:
+                await client.connect_to_server()
+                logger.info(f"重新连接客户端 {name} 成功")
+            except Exception as e:
+                logger.error(f"重新连接客户端 {name} 失败: {e}")
 
 
 
-load_dotenv()
+
 api_key = os.getenv("DASHSCOPE_API_KEY")
 base_url = os.getenv("DASHSCOPE_BASE_URL")
 model = 'qwen-plus'
 
 async def main():
-
-
     agent = Agent(api_key, base_url, model)
-
     await agent.setup()
     # 这里可以添加更多使用 agent 的代码
-    await agent.chat("你可以操作哪一个文件夹？")
-
+    res = await agent.chat("你可以操作哪一个文件夹？")
+    print(f"回复结果为：{res}")
 if __name__ == "__main__":
     try:
         asyncio.run(main())

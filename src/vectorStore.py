@@ -8,10 +8,12 @@ from llama_index.core.schema import TextNode
 import os 
 from dotenv import load_dotenv
 from llama_index.core.storage import StorageContext
+import shutil
 
 load_dotenv()
 
 DB_PATH = os.getenv("PROJECT_PATH") + "/VectorStore"
+KB_PATH = os.getenv("PROJECT_PATH") + "/knowledge_base"
 
 class VectorStore:
     def __init__(self, index_path: str = DB_PATH, model_name: str = DashScopeTextEmbeddingModels.TEXT_EMBEDDING_V2, type: str = DashScopeTextEmbeddingType.TEXT_TYPE_DOCUMENT):
@@ -55,6 +57,25 @@ class VectorStore:
         )
         return index
     
+
+    def delete_index(self, label: str):
+        kb_dir = os.path.join(KB_PATH, label)
+        vs_dir = os.path.join(self.index_path, label)
+
+        if os.path.exists(kb_dir):
+            shutil.rmtree(kb_dir)
+        
+        else:
+            raise ValueError(f"知识库不存在: {label}")
+
+        if os.path.exists(vs_dir):
+            shutil.rmtree(vs_dir)
+        
+        else:
+            raise ValueError(f"向量数据库路径不存在: {vs_dir}") 
+        
+        return 1
+
     def list_label(self):
         return os.listdir(self.index_path)
 

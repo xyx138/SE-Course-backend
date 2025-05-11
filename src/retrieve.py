@@ -61,6 +61,12 @@ class Retriever:
         index = self.vector_store.create_index(file_path, label)
         return index
 
+    def delete_index(self, label: str):
+        try:
+            res = self.vector_store.delete_index(label)
+            return res
+        except Exception as e:
+            return f"删除向量索引失败: {e}"
     
 
 if __name__ == "__main__":
