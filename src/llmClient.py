@@ -9,10 +9,11 @@ load_dotenv()
 '''大模型客户端'''
 class LLMClient():
     
-    def __init__(self, api_key: str, base_url: str, model: str, system_prompt: str) -> None:
+    def __init__(self, api_key: str, base_url: str, model: str, system_prompt: str = None) -> None:
         '''初始化大模型客户端'''
         self.client = OpenAI(api_key=api_key, base_url=base_url)
-        self.system_prompt = system_prompt 
+        self.system_prompt = system_prompt
+
         self.messages = [
             {
                 "role": 'system',

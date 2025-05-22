@@ -39,8 +39,8 @@
 '''
  
 
-from agent import Agent
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from agent import Agent 
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter, Body
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 import threading
@@ -56,6 +56,9 @@ import functools
 from umlAgent import UML_Agent
 from fastapi.staticfiles import StaticFiles
 from enum import Enum
+from fastapi import Query
+from questionAgent import questionAgent
+
 load_dotenv()
 api_key = os.getenv("DASHSCOPE_API_KEY")
 base_url = os.getenv("DASHSCOPE_BASE_URL")
@@ -74,6 +77,9 @@ agent = Agent(api_key, base_url, model)
 agent_lock = threading.Lock()
 agent_ready = threading.Event()
 umlAgent = UML_Agent(api_key, base_url, model)
+
+
+question_agent = questionAgent(api_key, base_url, model)
 
 
 # 保存全局事件循环引用
@@ -166,6 +172,13 @@ async def run_in_agent_thread(
         functools.partial(response_future.result, timeout=timeout)
     )
 
+class ErrorTrackingRequest(BaseModel):
+    question: str
+    user_answer: str
+    correct: bool
+
+class StepByStepRequest(BaseModel):
+    question: str
 
 # 启动 Agent 的异步任务
 async def start_agent():
@@ -173,6 +186,7 @@ async def start_agent():
     try:
         await agent.setup()
         await umlAgent.setup()
+        await question_agent.setup()
         agent_ready.set()
         print("Agent 初始化完成")
     except Exception as e:
@@ -209,7 +223,10 @@ app = FastAPI()
 
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory=UML_STATIC_DIR), name="static")
-
+@app.get("/one_question_by_knowledge_point")
+async def one_question_by_knowledge_point(knowledge_point: str = Query(...)):
+    result = await question_agent.get_one_question_by_knowledge_point(knowledge_point)
+    return result
 @app.get("/")
 async def root():
     return {"message": "提供agent服务"}
@@ -296,6 +313,13 @@ async def delete_knowledge_base(name: str = Form(...)):
     except Exception as e:
         return {"status": "error", "message": f"删除知识库时出错: {str(e)}"}
 
+
+@app.post("/question_agent/update_label")
+async def question_agent_update_label(name: str = Form(...)):
+    global question_agent
+    await question_agent.update_label(name)
+    return {"status": "success", "message": f"成功更新知识库标签: {name}"}
+
 @app.post("/update_label")
 async def update_label(name: str = Form(...)):
 
@@ -344,7 +368,45 @@ async def generate_uml(
         # 处理其他异常
         return {"status": "error", "message": f"生成UML图时出错: {str(e)}"}
 
+@app.post("/analyze_knowledge_points")
+async def analyze_knowledge_points(query: str = Form(...)):
+    """分析用户查询中的知识点并检索相关习题"""
+    try:
+        result = await question_agent.analyze_knowledge_points(query)
+        return {"status": "success", "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
+
+
+
+@app.post("/step_by_step_interactive")
+async def step_by_step_interactive(
+    question: str = Body(...),
+    history: list = Body(default=[])
+):
+    # 构造 prompt
+    prompt = (
+        f"题目：{question}\n"
+        f"历史对话：\n"
+    )
+    for h in history:
+        if h["role"] == "user":
+            prompt += f"学生：{h['content']}\n"
+        else:
+            prompt += f"老师：{h['content']}\n"
+    prompt += (
+        "请根据学生的最新回答，给出下一步引导，不要直接给出最终答案。"
+        "如果学生已经答对了，不要再继续提问，直接说'回答正确，解题结束'。"
+    )
+    # 调用 LLM
+    step = await question_agent.chat(prompt)
+    
+    history = list(history)
+    history.append({"role": "assistant", "content": step})
+    # 判断是否结束
+    finished = ("解题结束" in step) or ("回答正确" in step)
+    return {"history": history, "step": step, "finished": finished}
 
 if __name__ == "__main__":
     # 启动后台线程
