@@ -9,18 +9,15 @@ load_dotenv()
 '''大模型客户端'''
 class LLMClient():
     
-    def __init__(self, api_key: str, base_url: str, model: str) -> None:
+    def __init__(self, api_key: str, base_url: str, model: str, system_prompt: str = None) -> None:
         '''初始化大模型客户端'''
         self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.system_prompt = system_prompt
+
         self.messages = [
             {
                 "role": 'system',
-                "content": f'''你是一个有用的助手。必要的时候，你可以直接调用工具来实现用户的需求。
-                1. 如果你能够通过工具调用实现该功能，就不需要回复实现该功能的代码了。
-                2. 项目的根目录为{os.getenv('PROJECT_PATH')}, 所有的文件操作都基于这个根目录。
-                3. 操作文件的文件路径参数名是path而不是file_path。
-                4. 如果用户没有指定准确的写入文件的路径，请自动拼接{os.getenv('PROJECT_PATH') + '/public/'}到用户提供的文件路径前面。
-                5. 对于地点相关的问题，必要的时候你应该优先获取地点的经纬度，然后使用amap-maps工具来获取地点的详细信息。'''
+                "content": self.system_prompt
             }
         ]
         self.model = model

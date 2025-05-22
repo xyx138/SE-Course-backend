@@ -10,7 +10,7 @@ import shutil
 import httpx
 import requests
 # 导入你的 Agent 相关模块
-from agent import Agent
+from questionAgent import questionAgent
 from retrieve import Retriever
 from vectorStore import VectorStore
 
@@ -20,9 +20,9 @@ load_dotenv()
 PROJECT_PATH = os.getenv("PROJECT_PATH")
 
 examples = [
-    "爬取豆瓣评分前10的电影，并写入到movies.txt文件中？",
-    "从北京到天津的路径规划？",
-    "今天北京的天气怎么样？"
+    "给我出一道考察数据流程图的习题",
+    "总结我的知识盲点",
+    "如何证明贪心算法的最优子结构性质？"
 ]
 
 # 修改为使用HTTP请求的版本
@@ -675,7 +675,143 @@ with gr.Blocks(
         outputs=[kb_name_dropdown, delete_kb_name, kb_list],
         queue=False
     )
+    with gr.TabItem("🎯 知识点出题", id="one_question_tab"):
+        with gr.Row():
+            knowledge_point_input = gr.Textbox(
+                label="输入知识点",
+                placeholder="如：数据流程图",
+                lines=1
+            )
+            get_question_btn = gr.Button("随机出一道题", variant="primary")
+        question_output = gr.Textbox(label="习题内容", lines=8, interactive=False)
 
+        async def get_one_question(knowledge_point):
+            if not knowledge_point.strip():
+                return "请输入知识点"
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        "http://localhost:8000/one_question_by_knowledge_point",
+                        params={"knowledge_point": knowledge_point}
+                    )
+                    data = resp.json()
+                    # 兼容 questions 列表
+                    if "questions" in data and isinstance(data["questions"], list) and len(data["questions"]) > 0:
+                        # 只取第一道题
+                        return data["questions"][0]["question"]
+                    elif "question" in data:
+                        return data["question"]
+                    elif "error" in data:
+                        return data["error"]
+                    else:
+                        return "未获取到题目"
+            except Exception as e:
+                return f"请求出错: {str(e)}"
+
+    get_question_btn.click(
+        get_one_question,
+        inputs=[knowledge_point_input],
+        outputs=[question_output]
+    )
+    # 学习分析标签页 - 新增
+    with gr.TabItem("📊 学习分析", id="learning_tab") as learning_tab:
+        with gr.Row():
+            analysis_btn = gr.Button("生成易错知识点与知识盲点分析", variant="primary")
+            analysis_results = gr.JSON(label="分析报告")
+
+        async def get_learning_analysis():
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.get("http://localhost:8000/learning_analysis")
+                    return response.json().get("data", {})
+            except Exception as e:
+                return {"error": str(e)}
+
+        analysis_btn.click(
+            get_learning_analysis,
+            inputs=[],
+            outputs=[analysis_results]
+        )
+
+    # 新增分步交互解题Tab
+    with gr.Tab("📝分步交互解题"):
+        gr.Markdown("#### 分步交互式引导解题")
+        question_input = gr.Textbox(label="请输入你要解答的题目", lines=4)
+        history_state = gr.State([])  # 存储历史对话
+        history_output = gr.Markdown(label="对话历史")
+        current_step_output = gr.Markdown(label="当前引导")
+        user_reply = gr.Textbox(label="你的本步回答", lines=2)
+        start_btn = gr.Button("开始分步解题")
+        next_btn = gr.Button("提交本步回答")
+
+        # 格式化历史
+        def format_history(history):
+            return "\n\n".join(
+                [f"**{'学生' if h['role']=='user' else '老师'}：** {h['content']}" for h in history]
+            )
+
+        # 1. 开始分步解题，自动请求第1步
+        async def start_step_by_step(question):
+            history = []
+            # 请求第1步引导
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    "http://localhost:8000/step_by_step_interactive",
+                    json={"question": question, "history": history}
+                )
+                data = resp.json()
+                if "step" in data:
+                    step = data["step"]
+                    history.append({"role": "assistant", "content": step})
+                    return history, format_history(history), step, ""
+                else:
+                    return history, "", "未获取到第1步引导", ""
+
+        start_btn.click(
+            start_step_by_step,
+            inputs=question_input,
+            outputs=[history_state, history_output, current_step_output, user_reply]
+        )
+
+        # 2. 交互式每一步
+        async def interactive_step(question, history, user_reply_text):
+            history = list(history)
+            if user_reply_text.strip():
+                history.append({"role": "user", "content": user_reply_text})
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    "http://localhost:8000/step_by_step_interactive",
+                    json={"question": question, "history": history}
+                )
+                data = resp.json()
+                if "history" in data:
+                    finished = data.get("finished", False)
+                    # 如果 finished，禁用输入框和按钮
+                    if finished:
+                        return (
+                            data["history"],
+                            format_history(data["history"]),
+                            "🎉 本题已完成！",
+                            gr.update(value="", interactive=False),  # 禁用输入框
+                            gr.update(interactive=False)             # 禁用按钮
+                        )
+                    else:
+                        return (
+                            data["history"],
+                            format_history(data["history"]),
+                            "",  # 当前引导区留空
+                            gr.update(value="", interactive=True),   # 输入框可用
+                            gr.update(interactive=True)              # 按钮可用
+                        )
+                else:
+                    return history, format_history(history), "未获取到下一步引导", gr.update(interactive=True), gr.update(interactive=True)
+
+        # 绑定时，outputs 多加一个 user_reply 和 next_btn
+        next_btn.click(
+            interactive_step,
+            inputs=[question_input, history_state, user_reply],
+            outputs=[history_state, history_output, current_step_output, user_reply, next_btn]
+        )
 if __name__ == "__main__":
     # 启动Gradio应用
     app.launch(

@@ -1,5 +1,6 @@
 from llmClient import LLMClient
 from mcpClient import MCPClient
+
 from utils.load_json import load_mcp_config
 from utils.logger import MyLogger, logging
 from collections import defaultdict
@@ -10,34 +11,47 @@ import sys
 from asyncio import CancelledError
 import json
 from retrieve import Retriever
+import time 
+import traceback
+import random
+# import aiomysql
 
 load_dotenv()
 
 PROJECT_PATH = os.getenv('PROJECT_PATH')
 
 logger = MyLogger(log_file="logs/app.log", level=logging.INFO)
+# 数据库配置/用户答题记录
+MYSQL_CONFIG = {
+    "host": "localhost",
+    "port": 3306,
+    "user": "你的用户名",
+    "password": "你的密码",
+    "db": "chatbot"
+}
 
-system_prompt = f'''
-软件设计助手：
-你是一个软件设计助手
-
-注意：
-1. 项目的根目录为{os.getenv('PROJECT_PATH')}, 所有的文件操作都基于这个根目录。
-2. 操作文件的文件路径参数名是path而不是file_path。move_file的参数分别为source和destination，不要增加path后缀。
-3. 输出文件默认保存到{os.getenv('PROJECT_PATH')}/static
-'''
-
-class Agent():
+class questionAgent():
     '''agent = llm+tool'''
     
-    def __init__(self, api_key:str , base_url:str , model: str = None, label: str = None, system_prompt = system_prompt) -> None:
+    def __init__(self, api_key:str , base_url:str , model: str = None, label: str = '习题库') -> None:
         '''初始化 llm 客户端和 mcp 客户端'''
 
         logger.info("初始化LLM和MCP客户端")
 
-
-        self.system_prompt = system_prompt
-        self.llmClient = LLMClient(api_key, base_url, model, system_prompt=self.system_prompt)
+        system_prompt = f'''你是一个软件工程习题辅导专家，请严格按照以下规则进行引导：
+                1. 当我让你给我出一道题时，你默认从习题库中去寻找习题，并且不用分步引导，直接给出一道题。
+                2. 当用户提问涉及具体题目时，按以下流程处理：
+                    a. 分析题目类型和知识点
+                    b. 参考相似题目解答模式
+                    c. 生成引导式提问
+                3. 禁止直接给出完整答案或代码
+                4. 当检测到知识盲点时，提示相关基础概念
+                5. 使用中文进行交流，保持专业且友好的语气必要的时候，你可以直接调用工具来实现用户的需求。
+  
+               
+                '''
+        self.llmClient = LLMClient(api_key, base_url, model, system_prompt=system_prompt)
+        
         
         mcp_servers = load_mcp_config(PROJECT_PATH + '/mcp.json')['mcpServers']
         self.mcp_clients = defaultdict(MCPClient)
@@ -47,10 +61,10 @@ class Agent():
             self.mcp_clients[server_name] = MCPClient(command, args)
 
         self.retriever = Retriever(similarity_threshold=0.5)
-        self.label = None
-
-    async def getMessages(self):
-        return await self.llmClient.getMessages()
+        self.label = label
+        self.error_history = []  # 存储错误历史
+        self.knowledge_points = {}  # 存储知识点掌握情况
+        self.answer_history = []  # 新增
 
     async def update_label(self, label: str):
         '''
@@ -104,7 +118,7 @@ class Agent():
                     }
                 
                 for tool in tools])
-            print(f"获取到的工具数量为：{len(self.tools)}")
+            print(f"获取到的工具数为：{len(self.tools)}")
 
         except Exception as e:
             # 异常处理代码
@@ -121,10 +135,7 @@ class Agent():
             prompt = f"根据以下检索结果，回答用户的问题：\n{chunk_text}\n用户的问题是：{query}"
 
             logger.info(f"调用LLM")
-
-            
-
-            res = await self.llmClient.chat(message=prompt, tools=self.tools)
+            res = await self.llmClient.chat(prompt, self.tools)
             
             tool_calls = res.choices[0].message.tool_calls
 
@@ -158,8 +169,6 @@ class Agent():
                             # 调用工具
                             tool_res = await target_client.call_tool(name, args)  
                             print(f"调用{name}的执行结果为{tool_res}")
-
-
                             await self.llmClient.add_tool_call(
                                 role="tool", 
                                 content=tool_res.content, 
@@ -176,10 +185,6 @@ class Agent():
                                     try:
                                         tool_res = await target_client.call_tool(name, args)
                                         print(f"重新连接后调用{name}的执行结果为{tool_res}")
-
-                                        # todo 重试机制
-                                    
-
                                         await self.llmClient.add_tool_call(
                                             role="tool", 
                                             content=tool_res.content, 
@@ -214,6 +219,7 @@ class Agent():
             return res.choices[0].message.content
         except Exception as e:
             logger.error(f"聊天过程中出错: {e}")
+            logger.error(traceback.format_exc())
             return f"处理请求时出错: {str(e)}"
 
     async def delete_index(self, label: str):
@@ -256,26 +262,179 @@ class Agent():
                 logger.info(f"重新连接客户端 {name} 成功")
             except Exception as e:
                 logger.error(f"重新连接客户端 {name} 失败: {e}")
+    async def get_one_question_by_knowledge_point(self, knowledge_point: str) -> dict:
+        try:
+            if not self.label:
+                return {"error": "请先选择一个习题库"}
+            result = self.retriever.retrieve_by_knowledge_point(knowledge_point, self.label)
+            # 直接返回 result
+            return result
+        except Exception as e:
+            logger.error(traceback.format_exc())
+            return {"error": f'检索习题时出错: {str(e)}'}
+    async def analyze_knowledge_points(self, query: str) -> dict:
+        """分析用户查询中的知识点并检索相关习题"""
+        try:
+            # 检查是否已选择知识库
+            if not self.label:
+                return {
+                    "error": "请先选择一个知识库",
+        
+                }
+
+            # 使用LLM提取知识点
+            template = f'''
+            注意：你只需要回复以下json格式的内容：
+                {{
+                    "answer": "你的回复内容",
+                    "knowledge_points": ["知识点1", "知识点2", "知识点3"]
+                }}
+            '''
 
 
+            prompt = f"请给出与{query}相关的题目, {template}"
+
+            res = await self.chat(prompt)
+            print(f"question_agent_res:{res}")  
+            # 提取知识点
+            return res
+        except Exception as e:
+            logger.error(f"分析知识点时出错: {e}")
+            return {"error": f"分析知识点时出错: {str(e)}"}
+
+
+    async def track_error(self, question: str, user_answer: str, correct: bool):
+        """记录用户答题情况"""
+        try:
+            # 提取题目中的知识点
+            prompt = f"请从以下题目中提取关键知识点：{question}"
+            res = await self.llmClient.chat(prompt)
+            knowledge_points = res.choices[0].message.content.split(",")
+            
+            # 更新知识点掌握情况
+            for point in knowledge_points:
+                point = point.strip()
+                if point:
+                    if point not in self.knowledge_points:
+                        self.knowledge_points[point] = {"correct": 0, "total": 0}
+                    self.knowledge_points[point]["total"] += 1
+                    if correct:
+                        self.knowledge_points[point]["correct"] += 1
+            
+            # 记录错误历史
+            if not correct:
+                self.error_history.append({
+                    "question": question,
+                    "user_answer": user_answer,
+                    "knowledge_points": knowledge_points,
+                    "timestamp": time.time()
+                })
+            
+            # 记录所有答题历史
+            self.answer_history.append({
+                "question": question,
+                "user_answer": user_answer,
+                "knowledge_points": knowledge_points,
+                "correct": correct,
+                "timestamp": time.time()
+            })
+            
+            await self.save_conversation_to_mysql(
+                question=question,
+                answer=user_answer,
+                knowledge_points=knowledge_points,
+                correct=correct,
+                user_id=None
+            )
+            
+            return {"status": "success"}
+        except Exception as e:
+            logger.error(f"记录错误时出错: {e}")
+            return {"error": str(e)}
+
+    async def get_learning_analysis(self):
+        """
+        返回易错知识点和知识盲点分析
+        """
+        # 统计错题知识点
+        error_points = []
+        for err in self.error_history:
+            error_points.extend(err.get("knowledge_points", []))
+        # 统计出现频率
+        from collections import Counter
+        error_counter = Counter(error_points)
+        # 取前N个易错知识点
+        most_common_errors = error_counter.most_common(5)
+
+        # 统计知识盲点（题库中有但用户从未答对过的知识点）
+        all_points = set(self.retriever.get_all_knowledge_points())
+        answered_points = set()
+        for record in self.answer_history:  # 假设你有答题历史
+            if record.get("correct"):
+                answered_points.update(record.get("knowledge_points", []))
+        blind_points = list(all_points - answered_points)
+
+        return {
+            "易错知识点": [{"知识点": k, "错误次数": v} for k, v in most_common_errors],
+            "知识盲点": blind_points
+        }
+
+    async def step_by_step_solve(self, question: str) -> dict:
+        try:
+            if not self.label:
+                return {"error": "请先选择一个知识库"}
+            # 1. 检索相关知识点/相似题
+            related_chunks = self.retriever.retrieve(question, self.label)
+            # 2. 构造分步引导 prompt
+            prompt = (
+                "你是一名智能学习助手。请结合下方检索到的知识点和相似题，"
+                "对用户输入的题目进行分步引导式解答。每一步都要详细说明思路，不要直接给出最终答案。\n\n"
+                f"【检索到的知识/相似题】\n{related_chunks}\n"
+                f"【用户题目】\n{question}\n"
+                "请按以下格式输出：\n"
+                "第1步：...\n第2步：...\n（直到解题完成）"
+            )
+            # 3. 调用大模型
+            res = await self.llmClient.chat(prompt)
+            answer = res.choices[0].message.content
+            return {"step_by_step_solution": answer}
+        except Exception as e:
+            return {"error": f"分步解题时出错: {str(e)}"}
+
+    # async def save_conversation_to_mysql(self, question, answer, knowledge_points=None, correct=None, user_id=None):
+    #     try:
+    #         conn = await aiomysql.connect(
+    #             host=MYSQL_CONFIG["host"],
+    #             port=MYSQL_CONFIG["port"],
+    #             user=MYSQL_CONFIG["user"],
+    #             password=MYSQL_CONFIG["password"],
+    #             db=MYSQL_CONFIG["db"],
+    #             autocommit=True
+    #         )
+    #         async with conn.cursor() as cur:
+    #             await cur.execute(
+    #                 "INSERT INTO conversation_history (user_id, question, answer, knowledge_points, correct) VALUES (%s, %s, %s, %s, %s)",
+    #                 (user_id, question, answer, ','.join(knowledge_points) if knowledge_points else None, correct)
+    #             )
+    #         conn.close()
+    #     except Exception as e:
+    #         logger.error(f"MySQL写入对话历史失败: {e}")
+
+
+
+            
 
 
 api_key = os.getenv("DASHSCOPE_API_KEY")
 base_url = os.getenv("DASHSCOPE_BASE_URL")
 model = 'qwen-plus'
 
-prompt = f'''
-我想要设计一个电商订单管理系统。画出该系统的类图。
-'''
-
 async def main():
-    agent = Agent(api_key, base_url, model)
+    agent = questionAgent(api_key, base_url, model)
     await agent.setup()
     # 这里可以添加更多使用 agent 的代码
-    res = await agent.chat(prompt)
+    res = await agent.chat("你可以操作哪一个文件夹？")
     print(f"回复结果为：{res}")
-
-
 if __name__ == "__main__":
     try:
         asyncio.run(main())

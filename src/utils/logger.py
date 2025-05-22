@@ -5,7 +5,7 @@ class MyLogger:
     def __init__(self, name: str = __name__, log_file: str = None, level: int = logging.INFO):
         self.logger = logging.getLogger(name)
         self.logger.setLevel(level)
-
+        self.logger.propagate = False
         formatter = logging.Formatter(f"{'=='*20} %(asctime)s - %(levelname)s - %(message)s {'==' * 20}", 
                                       datefmt='%Y-%m-%d %H:%M:%S')
 
