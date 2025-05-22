@@ -1,6 +1,5 @@
 from llmClient import LLMClient
 from mcpClient import MCPClient
-
 from utils.load_json import load_mcp_config
 from utils.logger import MyLogger, logging
 from collections import defaultdict
@@ -18,16 +17,27 @@ PROJECT_PATH = os.getenv('PROJECT_PATH')
 
 logger = MyLogger(log_file="logs/app.log", level=logging.INFO)
 
+system_prompt = f'''
+软件设计助手：
+你是一个软件设计助手
+
+注意：
+1. 项目的根目录为{os.getenv('PROJECT_PATH')}, 所有的文件操作都基于这个根目录。
+2. 操作文件的文件路径参数名是path而不是file_path。move_file的参数分别为source和destination，不要增加path后缀。
+3. 输出文件默认保存到{os.getenv('PROJECT_PATH')}/static
+'''
 
 class Agent():
     '''agent = llm+tool'''
     
-    def __init__(self, api_key:str , base_url:str , model: str = None, label: str = None) -> None:
+    def __init__(self, api_key:str , base_url:str , model: str = None, label: str = None, system_prompt = system_prompt) -> None:
         '''初始化 llm 客户端和 mcp 客户端'''
 
         logger.info("初始化LLM和MCP客户端")
 
-        self.llmClient = LLMClient(api_key, base_url, model)
+
+        self.system_prompt = system_prompt
+        self.llmClient = LLMClient(api_key, base_url, model, system_prompt=self.system_prompt)
         
         mcp_servers = load_mcp_config(PROJECT_PATH + '/mcp.json')['mcpServers']
         self.mcp_clients = defaultdict(MCPClient)
@@ -38,6 +48,9 @@ class Agent():
 
         self.retriever = Retriever(similarity_threshold=0.5)
         self.label = None
+
+    async def getMessages(self):
+        return await self.llmClient.getMessages()
 
     async def update_label(self, label: str):
         '''
@@ -91,7 +104,7 @@ class Agent():
                     }
                 
                 for tool in tools])
-            print(f"获取到的工具为：{self.tools}")
+            print(f"获取到的工具数量为：{len(self.tools)}")
 
         except Exception as e:
             # 异常处理代码
@@ -108,7 +121,10 @@ class Agent():
             prompt = f"根据以下检索结果，回答用户的问题：\n{chunk_text}\n用户的问题是：{query}"
 
             logger.info(f"调用LLM")
-            res = await self.llmClient.chat(prompt, self.tools)
+
+            
+
+            res = await self.llmClient.chat(message=prompt, tools=self.tools)
             
             tool_calls = res.choices[0].message.tool_calls
 
@@ -142,6 +158,8 @@ class Agent():
                             # 调用工具
                             tool_res = await target_client.call_tool(name, args)  
                             print(f"调用{name}的执行结果为{tool_res}")
+
+
                             await self.llmClient.add_tool_call(
                                 role="tool", 
                                 content=tool_res.content, 
@@ -158,6 +176,10 @@ class Agent():
                                     try:
                                         tool_res = await target_client.call_tool(name, args)
                                         print(f"重新连接后调用{name}的执行结果为{tool_res}")
+
+                                        # todo 重试机制
+                                    
+
                                         await self.llmClient.add_tool_call(
                                             role="tool", 
                                             content=tool_res.content, 
@@ -242,12 +264,18 @@ api_key = os.getenv("DASHSCOPE_API_KEY")
 base_url = os.getenv("DASHSCOPE_BASE_URL")
 model = 'qwen-plus'
 
+prompt = f'''
+我想要设计一个电商订单管理系统。画出该系统的类图。
+'''
+
 async def main():
     agent = Agent(api_key, base_url, model)
     await agent.setup()
     # 这里可以添加更多使用 agent 的代码
-    res = await agent.chat("你可以操作哪一个文件夹？")
+    res = await agent.chat(prompt)
     print(f"回复结果为：{res}")
+
+
 if __name__ == "__main__":
     try:
         asyncio.run(main())

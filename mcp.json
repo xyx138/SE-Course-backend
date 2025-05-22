@@ -23,6 +23,15 @@
             "env": {
                 "AMAP_MAPS_API_KEY":"${AMAP_MAPS_API_KEY}"
             }
+        },
+        "UML-MCP-Server": {
+            "command": "uv",
+            "args": [
+                "--directory",
+                "${PROJECT_PATH}/tools/uml-mcp-server",
+                "run",
+                "uml_mcp_server.py"
+            ]
         }
     }
 }

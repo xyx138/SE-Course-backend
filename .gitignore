@@ -22,3 +22,11 @@ uv.lock
 logs/
 
 test/
+
+show_image.md
+
+requirements.txt
+
+system_template.txt
+
+static/

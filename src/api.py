@@ -41,6 +41,7 @@
 
 from agent import Agent
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 import threading
 import os
@@ -48,10 +49,13 @@ from pydantic import BaseModel
 import asyncio
 import uvicorn
 import time
-from typing import List
+from typing import List, Any, Callable, TypeVar, Awaitable
 import shutil
 import concurrent.futures
 import functools
+from umlAgent import UML_Agent
+from fastapi.staticfiles import StaticFiles
+from enum import Enum
 load_dotenv()
 api_key = os.getenv("DASHSCOPE_API_KEY")
 base_url = os.getenv("DASHSCOPE_BASE_URL")
@@ -66,23 +70,109 @@ PROJECT_ROOT = os.getenv("PROJECT_PATH")
 
 
 # 全局变量
-agent = None
+agent = Agent(api_key, base_url, model) 
 agent_lock = threading.Lock()
 agent_ready = threading.Event()
+umlAgent = UML_Agent(api_key, base_url, model)
+
 
 # 保存全局事件循环引用
 agent_loop = None
 
+# 确保存放UML图片的目录存在
+UML_STATIC_DIR = os.path.join(os.getenv("PROJECT_PATH"), "static")
+os.makedirs(UML_STATIC_DIR, exist_ok=True)
+
 class ChatRequest(BaseModel):
     message: str
+
+
+# uml图类型
+UML_TYPES = [
+    "class", "sequence", "activity", "usecase", 
+    "state", "component", "deployment", "object"
+]
+
+# 定义类型变量，用于泛型函数
+T = TypeVar('T')
+
+# 定义UML图类型枚举
+class DiagramType(str, Enum):
+    CLASS = "class"
+    SEQUENCE = "sequence"
+    ACTIVITY = "activity"
+    USECASE = "usecase"
+    STATE = "state"
+    COMPONENT = "component"
+    DEPLOYMENT = "deployment"
+    OBJECT = "object"
+
+async def run_in_agent_thread(
+    coro_func: Callable[..., Awaitable[T]], 
+    *args, 
+    timeout: int = 300,
+    **kwargs
+) -> T:
+    """
+    在Agent线程的事件循环中执行异步函数，并等待结果
+    
+    Args:
+        coro_func: 要执行的异步函数
+        *args: 传递给异步函数的位置参数
+        timeout: 等待结果的超时时间（秒）
+        **kwargs: 传递给异步函数的关键字参数
+        
+    Returns:
+        异步函数的执行结果
+        
+    Raises:
+        concurrent.futures.TimeoutError: 如果等待超时
+        Exception: 如果异步函数执行出错
+    """
+    global agent_loop
+    
+    if agent_loop is None or agent_loop.is_closed():
+        raise RuntimeError("Agent事件循环未创建或已关闭")
+    
+    # 创建Future对象，用于在线程间传递结果
+    response_future = concurrent.futures.Future()
+    
+    def run_in_loop():
+        """在agent事件循环中运行协程并设置Future结果"""
+        try:
+            # 创建协程
+            coro = coro_func(*args, **kwargs)
+            # 创建Task
+            task = agent_loop.create_task(coro)
+            
+            # 添加回调函数以设置Future的结果
+            def set_result(task):
+                try:
+                    result = task.result()
+                    response_future.set_result(result)
+                except Exception as e:
+                    response_future.set_exception(e)
+            
+            task.add_done_callback(set_result)
+        except Exception as e:
+            response_future.set_exception(e)
+    
+    # 将函数调度到agent事件循环所在的线程中执行
+    agent_loop.call_soon_threadsafe(run_in_loop)
+    
+    # 等待结果
+    return await asyncio.get_event_loop().run_in_executor(
+        None, 
+        functools.partial(response_future.result, timeout=timeout)
+    )
 
 
 # 启动 Agent 的异步任务
 async def start_agent():
     global agent
     try:
-        agent = Agent(api_key, base_url, model)
         await agent.setup()
+        await umlAgent.setup()
         agent_ready.set()
         print("Agent 初始化完成")
     except Exception as e:
@@ -117,53 +207,22 @@ def background_start_agent():
 
 app = FastAPI()
 
+# 挂载静态文件目录
+app.mount("/static", StaticFiles(directory=UML_STATIC_DIR), name="static")
+
 @app.get("/")
 async def root():
     return {"message": "提供agent服务"}
 
-
 @app.post("/chat")
 async def chat(message: str = Form(...)):
-    global agent, agent_loop
     
     if not agent or not agent_ready.is_set():
         return {"status": "error", "message": "Agent 尚未准备好，请稍后再试"}
     
-    if agent_loop is None or agent_loop.is_closed():
-        return {"status": "error", "message": "Agent事件循环未创建或已关闭"}
-    
-    # 创建一个Future对象，用于在agent线程中执行并获取结果
-    response_future = concurrent.futures.Future()
-    
-    def run_chat_in_agent_thread():
-        """在agent的事件循环中运行chat方法并设置Future结果"""
-        try:
-            # 创建协程
-            coro = agent.chat(message)
-            # 创建Task
-            task = agent_loop.create_task(coro)
-            
-            # 添加回调函数以设置Future的结果
-            def set_result(task):
-                try:
-                    result = task.result()
-                    response_future.set_result(result)
-                except Exception as e:
-                    response_future.set_exception(e)
-            
-            task.add_done_callback(set_result)
-        except Exception as e:
-            response_future.set_exception(e)
-    
-    # 将函数调度到agent事件循环所在的线程中执行
-    agent_loop.call_soon_threadsafe(run_chat_in_agent_thread)
-    
     try:
-        # 等待结果，设置超时
-        response = await asyncio.get_event_loop().run_in_executor(
-            None, 
-            functools.partial(response_future.result, timeout=300)
-        )
+        # 在Agent线程的事件循环中执行异步函数
+        response = await run_in_agent_thread(agent.chat, message, timeout=300)
         
         # 检查并处理返回值类型
         if response is None:
@@ -186,7 +245,7 @@ async def create_or_update_index(
     files: List[UploadFile] = File(...),
     name: str = Form(...)
 ):
-    global agent, agent_loop
+
     
     if not name:
         raise HTTPException(status_code=400, detail="请提供知识库名称")
@@ -213,34 +272,11 @@ async def create_or_update_index(
     except Exception as e:
         return {"status": "error", "message": f"创建知识库时出错: {str(e)}"}
     
-    # 在Agent的事件循环中创建向量存储
-    response_future = concurrent.futures.Future()
     
-    def run_create_index():
-        try:
-            coro = agent.create_index(files_dir=kb_dir, label=name)
-            task = agent_loop.create_task(coro)
-            
-            def set_result(task):
-                try:
-                    result = task.result()
-                    response_future.set_result(result)
-                except Exception as e:
-                    response_future.set_exception(e)
-            
-            task.add_done_callback(set_result)
-        except Exception as e:
-            response_future.set_exception(e)
-    
-    # 将函数调度到agent事件循环中执行
-    agent_loop.call_soon_threadsafe(run_create_index)
     
     try:
         # 等待结果
-        await asyncio.get_event_loop().run_in_executor(
-            None, 
-            functools.partial(response_future.result, timeout=120)
-        )
+        await run_in_agent_thread(agent.create_index, files_dir=kb_dir, label=name, timeout=120)
         return {"status": "success", "message": f"成功创建/更新知识库: {name}，包含 {len(file_paths)} 个文件"}
     except Exception as e:
         return {"status": "error", "message": f"创建向量存储时出错: {str(e)}"}
@@ -254,38 +290,14 @@ async def delete_knowledge_base(name: str = Form(...)):
     if not name:
         raise HTTPException(status_code=400, detail="请提供知识库名称")
     
-    global agent, agent_loop    
-
-    response_future = concurrent.futures.Future()
-
-    def run_delete_knowledge_base():
-        coro = agent.delete_index(name)
-        task = agent_loop.create_task(coro)
-
-        def set_result(task):
-            try:
-                result = task.result()
-                response_future.set_result(result)
-            except Exception as e:
-                response_future.set_exception(e)
-
-        task.add_done_callback(set_result)
-
-
-    agent_loop.call_soon_threadsafe(run_delete_knowledge_base)
-
     try:
-        await asyncio.get_event_loop().run_in_executor( 
-            None, 
-            functools.partial(response_future.result, timeout=30)
-            )
+        await run_in_agent_thread(agent.delete_index, name, timeout=30)
         return {"status": "success", "message": f"成功删除知识库: {name}"}
     except Exception as e:
         return {"status": "error", "message": f"删除知识库时出错: {str(e)}"}
 
 @app.post("/update_label")
 async def update_label(name: str = Form(...)):
-    global agent, agent_loop
 
     if not name:
         raise HTTPException(status_code=400, detail="请提供知识库名称")
@@ -296,35 +308,41 @@ async def update_label(name: str = Form(...)):
     if agent_loop is None or agent_loop.is_closed():
         return {"status": "error", "message": "Agent事件循环未创建或已关闭"}
 
-    response_future = concurrent.futures.Future()
-
-    def run_update_label():
-        try:
-            coro = agent.update_label(name)
-            task = agent_loop.create_task(coro)
-
-            def set_result(task):
-                try:
-                    result = task.result()
-                    response_future.set_result(result)
-                except Exception as e:
-                    response_future.set_exception(e)
-            
-            task.add_done_callback(set_result)
-        except Exception as e:
-            response_future.set_exception(e)
-
-    agent_loop.call_soon_threadsafe(run_update_label) # 将任务调度到agent事件循环所在的线程中执行
 
     try:
         # 等待结果
-        await asyncio.get_event_loop().run_in_executor(
-            None, 
-            functools.partial(response_future.result, timeout=30)
-        )
+        await run_in_agent_thread(agent.update_label, name, timeout=30)
         return {"status": "success", "message": f"成功更新知识库标签: {name}"}
     except Exception as e:
         return {"status": "error", "message": f"更新知识库标签时出错: {str(e)}"}
+
+@app.post("/umlAgent/generate_uml")
+async def generate_uml(
+    query: str = Form(...),
+    diagram_type: DiagramType = Form(...)
+):
+    try:
+        # 现在diagram_type已经是枚举类型，可以直接使用其值
+        result = await run_in_agent_thread(umlAgent.generate_uml, query, diagram_type.value, timeout=60)
+        
+        import json
+        decoded_result = json.loads(result)
+
+        url = decoded_result["url"]
+        res_text = decoded_result["message"]
+        
+        static_path = f"http://localhost:8000/static/{diagram_type.value}/uml.png"
+        return {"status": "success", "message": res_text, "static_path": static_path, "url": url}
+
+    except ValueError:
+        # 处理无效的枚举值
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的图表类型。支持的类型: {', '.join([t.value for t in DiagramType])}"
+        )
+    except Exception as e:
+        # 处理其他异常
+        return {"status": "error", "message": f"生成UML图时出错: {str(e)}"}
 
 
 
