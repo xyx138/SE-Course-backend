@@ -18,8 +18,7 @@ PROJECT_PATH = os.getenv('PROJECT_PATH')
 logger = MyLogger(log_file="logs/app.log", level=logging.INFO)
 
 system_prompt = f'''
-软件设计助手：
-你是一个软件设计助手
+你是一个软件工程课程助手
 
 注意：
 1. 项目的根目录为{os.getenv('PROJECT_PATH')}, 所有的文件操作都基于这个根目录。

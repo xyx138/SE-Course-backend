@@ -87,6 +87,8 @@ class VectorStore:
         index.storage_context.persist(db_path)
         print(f"向量数据库创建成功，路径为{db_path}")
     
+
+
     def load_index(self, label: str):
 
         db_path = os.path.join(self.index_path, label)
@@ -119,6 +121,23 @@ class VectorStore:
 
     def list_label(self):
         return os.listdir(self.index_path)
+    
+    
+    def create_index(self, file_path: str, label: str):
+
+
+        # 确认路径存在
+        if not os.path.exists(file_path):
+            raise ValueError(f"文件路径不存在: {file_path}")
+
+        reader = SimpleDirectoryReader(file_path)
+        index = VectorStoreIndex.from_documents(
+            documents=reader.load_data(),
+            embedding=self.embedding_model,
+        )
+        db_path = os.path.join(self.index_path, label)
+        index.storage_context.persist(db_path)
+        print(f"向量数据库创建成功，路径为{db_path}")
 
 if __name__ == "__main__":
     vector_store = VectorStore()

@@ -21,6 +21,7 @@ dependencies = [
     "mcp>=1.2.0",
     "openai==1.55.3",
     "openpyxl==3.1.5",
+    "psutil>=7.0.0",
     "pydantic==2.10.6",
     "python-dateutil>=2.8.2",
     "python-dotenv>=1.1.0",

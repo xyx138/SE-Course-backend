@@ -223,17 +223,47 @@ app = FastAPI()
 
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory=UML_STATIC_DIR), name="static")
+
+
 @app.get("/one_question_by_knowledge_point")
 async def one_question_by_knowledge_point(knowledge_point: str = Query(...)):
+    """
+    根据知识点获取一道相关的练习题
+    
+    Args:
+        knowledge_point (str): 知识点名称
+        
+    Returns:
+        dict: 包含练习题的相关信息
+    """
     result = await question_agent.get_one_question_by_knowledge_point(knowledge_point)
     return result
+
 @app.get("/")
 async def root():
+    """
+    API根路径，返回服务状态信息
+    
+    Returns:
+        dict: 包含服务状态信息的字典
+    """
     return {"message": "提供agent服务"}
 
 @app.post("/chat")
 async def chat(message: str = Form(...)):
+    """
+    处理用户与Agent的对话请求
     
+    Args:
+        message (str): 用户发送的消息内容
+        
+    Returns:
+        dict: 包含状态和回复消息的字典
+        {
+            "status": "success"/"error",
+            "message": str
+        }
+    """
     if not agent or not agent_ready.is_set():
         return {"status": "error", "message": "Agent 尚未准备好，请稍后再试"}
     
@@ -262,8 +292,20 @@ async def create_or_update_index(
     files: List[UploadFile] = File(...),
     name: str = Form(...)
 ):
-
+    """
+    创建或更新知识库索引
     
+    Args:
+        files (List[UploadFile]): 上传的文件列表
+        name (str): 知识库名称
+        
+    Returns:
+        dict: 包含操作状态和消息的字典
+        {
+            "status": "success"/"error",
+            "message": str
+        }
+    """
     if not name:
         raise HTTPException(status_code=400, detail="请提供知识库名称")
 
@@ -300,10 +342,33 @@ async def create_or_update_index(
 
 @app.get("/list_knowledge_bases")
 async def list_knowledge_bases():
+    """
+    获取所有知识库列表
+    
+    Returns:
+        dict: 包含知识库列表的字典
+        {
+            "status": "success",
+            "knowledge_bases": List[str]
+        }
+    """
     return {"status": "success", "knowledge_bases": [os.path.basename(dir) for dir in os.listdir(KNOWLEDGE_DIR)]}
 
 @app.post("/delete_knowledge_base")
 async def delete_knowledge_base(name: str = Form(...)):
+    """
+    删除指定的知识库
+    
+    Args:
+        name (str): 要删除的知识库名称
+        
+    Returns:
+        dict: 包含操作状态和消息的字典
+        {
+            "status": "success"/"error",
+            "message": str
+        }
+    """
     if not name:
         raise HTTPException(status_code=400, detail="请提供知识库名称")
     
@@ -316,13 +381,38 @@ async def delete_knowledge_base(name: str = Form(...)):
 
 @app.post("/question_agent/update_label")
 async def question_agent_update_label(name: str = Form(...)):
+    """
+    更新解题Agent使用的知识库标签
+    
+    Args:
+        name (str): 知识库标签名称
+        
+    Returns:
+        dict: 包含操作状态和消息的字典
+        {
+            "status": "success",
+            "message": str
+        }
+    """
     global question_agent
     await question_agent.update_label(name)
     return {"status": "success", "message": f"成功更新知识库标签: {name}"}
 
 @app.post("/update_label")
 async def update_label(name: str = Form(...)):
-
+    """
+    更新普通Agent使用的知识库标签
+    
+    Args:
+        name (str): 知识库标签名称
+        
+    Returns:
+        dict: 包含操作状态和消息的字典
+        {
+            "status": "success"/"error",
+            "message": str
+        }
+    """
     if not name:
         raise HTTPException(status_code=400, detail="请提供知识库名称")
     
@@ -345,6 +435,22 @@ async def generate_uml(
     query: str = Form(...),
     diagram_type: DiagramType = Form(...)
 ):
+    """
+    生成UML图
+    
+    Args:
+        query (str): 用户的UML图生成请求
+        diagram_type (DiagramType): UML图类型，支持的类型包括：class, sequence, activity等
+        
+    Returns:
+        dict: 包含生成的UML图信息的字典
+        {
+            "status": "success"/"error",
+            "message": str,
+            "static_path": str,
+            "url": str
+        }
+    """
     try:
         # 现在diagram_type已经是枚举类型，可以直接使用其值
         result = await run_in_agent_thread(umlAgent.generate_uml, query, diagram_type.value, timeout=60)
@@ -370,21 +476,45 @@ async def generate_uml(
 
 @app.post("/analyze_knowledge_points")
 async def analyze_knowledge_points(query: str = Form(...)):
-    """分析用户查询中的知识点并检索相关习题"""
+    """
+    分析用户查询中的知识点并检索相关习题
+    
+    Args:
+        query (str): 用户的查询内容
+        
+    Returns:
+        dict: 包含分析结果的字典
+        {
+            "status": "success",
+            "data": Any
+        }
+    """
     try:
         result = await question_agent.analyze_knowledge_points(query)
         return {"status": "success", "data": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-
-
+    
 @app.post("/step_by_step_interactive")
 async def step_by_step_interactive(
     question: str = Body(...),
     history: list = Body(default=[])
 ):
+    """
+    提供多轮交互式解题指导
+    
+    Args:
+        question (str): 题目内容
+        history (list): 历史对话记录，格式为[{"role": str, "content": str}, ...]
+        
+    Returns:
+        dict: 包含对话历史、当前步骤和是否完成的信息
+        {
+            "history": List[dict],
+            "step": str,
+            "finished": bool
+        }
+    """
     # 构造 prompt
     prompt = (
         f"题目：{question}\n"

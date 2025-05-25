@@ -1,165 +1,142 @@
-#!/usr/bin/env python3
-"""
-启动脚本 - 激活虚拟环境并同时运行api.py和main.py (使用Python直接运行)
-"""
-
-import os
-import sys
 import subprocess
+import sys
 import time
 import signal
-import atexit
-import platform
-import random
-import traceback
+import socket
+import os
 
-# 存储进程对象
-processes = []
+def check_port(port):
+    """检查端口是否被占用"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(('', port))
+            return False
+        except socket.error:
+            return True
 
-def start_services():
-    """
-    启动API服务和Gradio界面
-    """
-    print("=" * 50)
-    print("启动知识库智能问答系统")
-    print("=" * 50)
+def is_docker_running():
+    """检查Docker是否正在运行"""
+    try:
+        subprocess.run(['docker', 'info'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+    except FileNotFoundError:
+        return False
 
-    # 确保当前工作目录正确
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir) if script_dir.endswith('scripts') else script_dir
-    os.chdir(project_root)
-    
-    # 确定虚拟环境中的Python解释器路径
-    is_windows = platform.system() == "Windows"
-    
-    if is_windows:
-        python_path = os.path.join(project_root, ".venv", "Scripts", "python.exe")
-    else:
-        python_path = os.path.join(project_root, ".venv", "bin", "python")
-    
-    # 检查Python解释器是否存在
-    if not os.path.exists(python_path):
-        print(f"错误: 虚拟环境Python解释器未找到: {python_path}")
-        print("请确保虚拟环境已正确创建并位于项目根目录的.venv文件夹中")
-        sys.exit(1)
-    
-    # 启动API服务
-    print("\n[1/2] 正在启动后端API服务...")
-    api_script = os.path.join(project_root, "src", "api.py")
-    
-    # 直接使用虚拟环境中的Python解释器启动脚本
-    api_process = subprocess.Popen(
-        [python_path, api_script],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
-    )
-    processes.append(api_process)
-    print(f"API服务启动成功 (PID: {api_process.pid})")
-    
-    # 等待API服务启动
-    print("等待API服务完全启动 (3秒)...")
-    time.sleep(3)
-    
-    # 启动Gradio界面
-    print("\n[2/2] 正在启动Gradio前端界面...")
-    main_script = os.path.join(project_root, "src", "main.py")
-    
-    # 直接使用虚拟环境中的Python解释器启动脚本
-    ui_process = subprocess.Popen(
-        [python_path, main_script],
-        stdout=subprocess.PIPE, 
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
-    )
-    processes.append(ui_process)
-    print(f"Gradio界面启动成功 (PID: {ui_process.pid})")
-    
-    return api_process, ui_process
+class ServiceManager:
+    def __init__(self):
+        self.plantuml_process = None
+        self.api_process = None
+        self.running = True
 
-def cleanup():
-    """
-    清理进程
-    """
-    print("\n" + "=" * 50)
-    print("正在关闭所有服务...")
-    
-    for process in processes:
-        if process.poll() is None:  # 如果进程仍在运行
+    def start_services(self):
+        """启动所有服务"""
+        # 检查Docker是否运行
+        if not is_docker_running():
+            print("\033[91mError: Docker is not running. Please start Docker first.\033[0m")
+            return False
+
+        # 检查端口
+        if check_port(8080):
+            print("\033[91mError: Port 8080 is already in use. Please free up the port first.\033[0m")
+            return False
+
+        # 启动PlantUML服务器
+        print("\033[92mStarting PlantUML server...\033[0m")
+        try:
+            self.plantuml_process = subprocess.Popen(
+                ['docker', 'run', '-d', '-p', '8080:8080', 'plantuml/plantuml-server:jetty'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"\033[91mError starting PlantUML server: {e}\033[0m")
+            return False
+
+        # 等待PlantUML服务器启动
+        print("Waiting for PlantUML server to initialize...")
+        time.sleep(5)
+
+        # 启动API服务
+        print("\033[92mStarting backend API service...\033[0m")
+        try:
+            self.api_process = subprocess.Popen(
+                ['uv', 'run', 'src/api.py'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"\033[91mError starting API service: {e}\033[0m")
+            self.cleanup()
+            return False
+        except FileNotFoundError:
+            print("\033[91mError: 'uv' command not found. Please install uv first.\033[0m")
+            self.cleanup()
+            return False
+
+        return True
+
+    def cleanup(self):
+        """清理所有服务"""
+        print("\n\033[93mStopping services...\033[0m")
+
+        # 停止API服务
+        if self.api_process:
+            self.api_process.terminate()
+            self.api_process.wait()
+
+        # 停止PlantUML服务器
+        if self.plantuml_process:
             try:
-                process.terminate()  # 尝试优雅终止
-                process.wait(timeout=3)  # 等待进程终止
-            except subprocess.TimeoutExpired:
-                process.kill()  # 如果超时，强制终止
-                print(f"已强制关闭进程 (PID: {process.pid})")
-            else:
-                print(f"已优雅关闭进程 (PID: {process.pid})")
-    
-    print("所有服务已关闭")
-    print("=" * 50)
+                container_id = subprocess.check_output(
+                    ['docker', 'ps', '-q', '--filter', 'ancestor=plantuml/plantuml-server:jetty'],
+                    text=True
+                ).strip()
+                if container_id:
+                    subprocess.run(['docker', 'stop', container_id], check=True)
+            except subprocess.CalledProcessError as e:
+                print(f"\033[91mError stopping PlantUML container: {e}\033[0m")
 
-def signal_handler(sig, frame):
-    """
-    处理中断信号
-    """
-    print("\n检测到中断信号，开始关闭服务...")
-    cleanup()
+        print("\033[92mAll services stopped\033[0m")
+
+    def monitor_processes(self):
+        """监控进程输出"""
+        while self.running:
+            # 检查API进程输出
+            if self.api_process:
+                output = self.api_process.stdout.readline()
+                if output:
+                    print(output.decode().strip())
+
+            # 简单的延时，避免CPU过度使用
+            time.sleep(0.1)
+
+def signal_handler(signum, frame):
+    """信号处理函数"""
+    print("\n\033[93mReceived shutdown signal. Cleaning up...\033[0m")
+    manager.running = False
+    manager.cleanup()
     sys.exit(0)
 
-def monitor_processes(api_process, ui_process):
-    """
-    监控进程输出并检查是否终止
-    """
-    print("\n" + "=" * 50)
-    print("系统已启动 - 按Ctrl+C可关闭所有服务")
-    print("=" * 50 + "\n")
-    
-    try:
-        while True:
-            # 检查API进程是否终止
-            api_returncode = api_process.poll()
-            if api_returncode is not None:
-                print(f"错误: API服务意外终止 (返回码: {api_returncode})")
-                # 输出最后的错误信息
-                output, _ = api_process.communicate()
-                if output:
-                    print(f"API服务最后输出:\n{output}")
-                break
-                
-            # 检查UI进程是否终止
-            ui_returncode = ui_process.poll()
-            if ui_returncode is not None:
-                print(f"错误: Gradio界面意外终止 (返回码: {ui_returncode})")
-                # 输出最后的错误信息
-                output, _ = ui_process.communicate()
-                if output:
-                    print(f"Gradio界面最后输出:\n{output}")
-                break
-                
-            # 读取并显示输出
-            for process, name in [(api_process, "API"), (ui_process, "UI")]:
-                while True:
-                    line = process.stdout.readline()
-                    if not line:
-                        break
-                    print(f"[{name}] {line.strip()}")
-            
-            time.sleep(0.1)
-    except KeyboardInterrupt:
-        print("\n检测到Ctrl+C，正在关闭服务...")
-    finally:
-        cleanup()
-
 if __name__ == "__main__":
-    # 注册退出和信号处理函数
-    atexit.register(cleanup)
+    # 创建服务管理器
+    manager = ServiceManager()
+
+    # 注册信号处理
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
-    # 启动服务
-    api_process, ui_process = start_services()
-    
-    # 监控服务
-    monitor_processes(api_process, ui_process)
+
+    try:
+        # 启动服务
+        if manager.start_services():
+            # print("\033[92mAll services started successfully!\033[0m")
+            # 监控进程输出
+            manager.monitor_processes()
+        else:
+            print("\033[91mFailed to start services\033[0m")
+            sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n\033[93mReceived keyboard interrupt. Shutting down...\033[0m")
+    finally:
+        manager.cleanup()
