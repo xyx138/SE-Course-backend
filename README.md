@@ -59,6 +59,6 @@
 6. 启动项目
 
    ```bash
-   sh 
+   uv run scripts/run.py
    ```
 
