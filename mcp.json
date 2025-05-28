@@ -1,9 +1,5 @@
 {
     "mcpServers": {
-        "fetch": {
-            "command": "uvx",
-            "args": ["mcp-server-fetch", "--ignore-robots-txt"]
-        },
         "filesystem": {
             "command": "npx",
             "args": [
@@ -22,6 +18,16 @@
                 "run",
                 "uml_mcp_server.py"
             ]
+        },
+        "bingcn": {
+            "command": "npx",
+            "args": [
+              "bing-cn-mcp"
+            ]
+        },
+        "fetch": {
+            "command": "uvx",
+            "args": ["mcp-server-fetch"]
         }
     }
 }

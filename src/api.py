@@ -1,44 +1,3 @@
-'''
- -----------------------------------------------------------------------------
- 双线程架构说明
- -----------------------------------------------------------------------------
-
- 本API服务采用双线程架构设计，包含两个主要线程：
-
- 1. 主线程 (FastAPI/uvicorn线程)
-    - 职责：处理HTTP请求，运行FastAPI端点函数
-    - 创建方式：uvicorn.run(app)自动创建
-    - 特点：有自己的事件循环，用于处理异步HTTP请求
-    - 注意事项：不应直接调用Agent的异步方法，应使用线程安全通信机制
-
- 2. Agent线程 (后台线程)
-    - 职责：初始化和运行Agent，处理所有工具调用
-    - 创建方式：threading.Thread(target=background_start_agent)
-    - 特点：创建独立事件循环(agent_loop)，维护Agent和MCP客户端生命周期
-    - 注意事项：所有Agent异步操作必须在此线程的事件循环中执行
-
- 线程间通信方式：
- - 使用concurrent.futures.Future实现线程间结果传递
- - 使用agent_loop.call_soon_threadsafe在Agent线程中安排任务执行
- - 全局变量agent和agent_loop用于共享对象引用
-
- 为何使用双线程架构：
- 1. 防止跨线程边界问题：异步对象必须在创建它们的同一事件循环中使用
- 2. 实现资源隔离：API请求处理与Agent操作分离，提高稳定性
- 3. 保持MCP客户端连接：Agent线程持续运行，维护工具连接状态
- 4. 允许并发处理：同时处理多个API请求而不阻塞Agent工作
-
- 典型使用模式（参见chat端点实现）：
- 1. 在API端点中创建Future对象
- 2. 使用call_soon_threadsafe在Agent线程中安排函数执行
- 3. 在安排的函数中创建协程并用agent_loop.create_task执行
- 4. 通过回调将结果设置到Future对象
- 5. API线程使用run_in_executor等待Future结果
-
- -----------------------------------------------------------------------------
-'''
- 
-
 from agent import Agent 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter, Body
 from fastapi.responses import FileResponse
@@ -58,6 +17,10 @@ from fastapi.staticfiles import StaticFiles
 from enum import Enum
 from fastapi import Query
 from questionAgent import questionAgent
+from explainAgent import ExplainAgent
+from typing import Optional
+import json
+from questionAgent import QuestionDifficulty, QuestionType
 
 load_dotenv()
 api_key = os.getenv("DASHSCOPE_API_KEY")
@@ -77,9 +40,10 @@ agent = Agent(api_key, base_url, model)
 agent_lock = threading.Lock()
 agent_ready = threading.Event()
 umlAgent = UML_Agent(api_key, base_url, model)
-
-
+explainAgent = ExplainAgent(api_key, base_url, model)
 question_agent = questionAgent(api_key, base_url, model)
+
+agents = [agent, umlAgent, explainAgent, question_agent]
 
 
 # 保存全局事件循环引用
@@ -88,6 +52,10 @@ agent_loop = None
 # 确保存放UML图片的目录存在
 UML_STATIC_DIR = os.path.join(os.getenv("PROJECT_PATH"), "static")
 os.makedirs(UML_STATIC_DIR, exist_ok=True)
+
+# 确保文档输出目录存在
+DOCS_DIR = os.path.join(os.getenv("PROJECT_PATH"), "static", "docs")
+os.makedirs(DOCS_DIR, exist_ok=True)
 
 class ChatRequest(BaseModel):
     message: str
@@ -113,6 +81,26 @@ class DiagramType(str, Enum):
     DEPLOYMENT = "deployment"
     OBJECT = "object"
 
+
+
+# 定义解释风格枚举
+    '''
+    解释风格：
+    - 严谨
+    - 通俗
+    - 专业
+    - 简洁
+    - 风趣
+    '''
+class ExplainStyle(str, Enum):
+    STRICT = "STRICT"
+    POPULAR = "POPULAR"
+    PROFESSIONAL = "PROFESSIONAL"
+    CONCISE = "CONCISE"
+    FUNNY = "FUNNY"
+
+
+# 工具函数
 async def run_in_agent_thread(
     coro_func: Callable[..., Awaitable[T]], 
     *args, 
@@ -184,9 +172,8 @@ class StepByStepRequest(BaseModel):
 async def start_agent():
     global agent
     try:
-        await agent.setup()
-        await umlAgent.setup()
-        await question_agent.setup()
+        for agt in agents:
+            await agt.setup()
         agent_ready.set()
         print("Agent 初始化完成")
     except Exception as e:
@@ -196,7 +183,7 @@ async def start_agent():
 # 在后台线程中启动 Agent
 def background_start_agent():
     """在后台线程中初始化Agent并保持事件循环运行"""
-    global agent, agent_loop
+    global  agent_loop
     
     # 创建新的事件循环
     loop = asyncio.new_event_loop()
@@ -224,20 +211,6 @@ app = FastAPI()
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory=UML_STATIC_DIR), name="static")
 
-
-@app.get("/one_question_by_knowledge_point")
-async def one_question_by_knowledge_point(knowledge_point: str = Query(...)):
-    """
-    根据知识点获取一道相关的练习题
-    
-    Args:
-        knowledge_point (str): 知识点名称
-        
-    Returns:
-        dict: 包含练习题的相关信息
-    """
-    result = await question_agent.get_one_question_by_knowledge_point(knowledge_point)
-    return result
 
 @app.get("/")
 async def root():
@@ -379,29 +352,10 @@ async def delete_knowledge_base(name: str = Form(...)):
         return {"status": "error", "message": f"删除知识库时出错: {str(e)}"}
 
 
-@app.post("/question_agent/update_label")
-async def question_agent_update_label(name: str = Form(...)):
-    """
-    更新解题Agent使用的知识库标签
-    
-    Args:
-        name (str): 知识库标签名称
-        
-    Returns:
-        dict: 包含操作状态和消息的字典
-        {
-            "status": "success",
-            "message": str
-        }
-    """
-    global question_agent
-    await question_agent.update_label(name)
-    return {"status": "success", "message": f"成功更新知识库标签: {name}"}
-
 @app.post("/update_label")
 async def update_label(name: str = Form(...)):
     """
-    更新普通Agent使用的知识库标签
+    更新所有Agent使用的知识库标签
     
     Args:
         name (str): 知识库标签名称
@@ -423,9 +377,15 @@ async def update_label(name: str = Form(...)):
         return {"status": "error", "message": "Agent事件循环未创建或已关闭"}
 
 
+    # 检查label是否存在
+    if name not in os.listdir(KNOWLEDGE_DIR):
+        return {"status": "error", "message": f"知识库{name}不存在"}
+
     try:
         # 等待结果
-        await run_in_agent_thread(agent.update_label, name, timeout=30)
+        for agt in agents:
+            await run_in_agent_thread(agt.update_label, name, timeout=30)
+
         return {"status": "success", "message": f"成功更新知识库标签: {name}"}
     except Exception as e:
         return {"status": "error", "message": f"更新知识库标签时出错: {str(e)}"}
@@ -448,95 +408,207 @@ async def generate_uml(
             "status": "success"/"error",
             "message": str,
             "static_path": str,
-            "url": str
         }
     """
     try:
         # 现在diagram_type已经是枚举类型，可以直接使用其值
-        result = await run_in_agent_thread(umlAgent.generate_uml, query, diagram_type.value, timeout=60)
+        result = await run_in_agent_thread(umlAgent.generate_uml, query, diagram_type.value, timeout=120)
         
-        import json
-        decoded_result = json.loads(result)
 
-        url = decoded_result["url"]
-        res_text = decoded_result["message"]
-        
-        static_path = f"http://localhost:8000/static/{diagram_type.value}/uml.png"
-        return {"status": "success", "message": res_text, "static_path": static_path, "url": url}
+        print(f"画图结果：{result}")
 
-    except ValueError:
-        # 处理无效的枚举值
-        raise HTTPException(
-            status_code=400,
-            detail=f"无效的图表类型。支持的类型: {', '.join([t.value for t in DiagramType])}"
-        )
+        return {"status": "success", "message": result['message'], "static_path": f"http://localhost:8000/static/{diagram_type.value}/uml.png"}
+
     except Exception as e:
         # 处理其他异常
-        return {"status": "error", "message": f"生成UML图时出错: {str(e)}"}
+        return {"status": "error", "message": f"生成UML图时出错: {str(e)}", "static_path": ""}
 
-@app.post("/analyze_knowledge_points")
-async def analyze_knowledge_points(query: str = Form(...)):
+@app.post("/explainAgent/explain")
+async def explain(
+    query: str = Form(...),
+    style_label: ExplainStyle = Form(...),
+    output_file_name: str = Form(None),
+    bing_search: bool = Form(False)
+):
     """
-    分析用户查询中的知识点并检索相关习题
+    处理概念解释请求
+    """
+    try:
+        # 使用位置参数调用
+        response = await run_in_agent_thread(
+            explainAgent.chat,
+            query,                  # 第一个参数
+            style_label.value,      # 第二个参数
+            output_file_name,       # 第三个参数
+            bing_search,            # 第四个参数
+            timeout=120             # timeout是run_in_agent_thread的参数
+        )
+        
+        # 如果指定了输出文件名，保存解释内容到文件
+        if output_file_name:
+            response["download_url"] = f"/download/{output_file_name}"
+        
+        return response
+    except Exception as e:
+        print(f"Error in explain endpoint: {str(e)}")
+        return {"status": "error", "message": f"生成解释时出错: {str(e)}"}
+
+@app.post("/questionAgent/explain_question")
+async def explain_question(
+    question: str = Form(...),
+):
+    """
+    解释用户输入的题目
+    message:
+        {{
+            "explanation": "详细解释",
+            "key_points": ["考察重点1", "考察重点2", ...],
+            "reference_answer": "参考答案"
+        }}
+    """
+    try:
+        result = await question_agent.explain_question(question)
+
+        return {"status": "success", "data": result['message']}
+    except Exception as e:
+        return {"status": "error", "message": f"解释题目时出错: {str(e)}"}
+
+@app.post("/questionAgent/generate_practice_set")
+async def generate_practice_set(
+    topics: str = Form(...),
+    num_questions: int = Form(5),
+    difficulty: QuestionDifficulty = QuestionDifficulty.MEDIUM
+):
+    """
+    生成练习题
+
+    data:
+        {{
+            "questions": [
+                {{
+                    "id": 1,
+                    "type": "题目类型",
+                    "question": "题目描述",
+                    "options": ["选项1", "选项2", ...],  // 选择题必须提供
+                    "reference_answer": "参考答案",
+                    "analysis": "解题思路",
+                    "topics": ["涉及知识点1", "涉及知识点2", ...]
+                }},
+                ...
+            ],
+            "total_points": 总分,
+            "estimated_time": "预计完成时间（分钟）",
+            "difficulty_distribution": {{
+                "easy": 简单题数量,
+                "medium": 中等题数量,
+                "hard": 困难题数量
+            }}
+        }}
+    """
+    try:
+        # 将接收到的字符串转换为列表
+        topic_list = [topic.strip() for topic in topics.split(",") if topic.strip()]
+        
+        # 调用question_agent时传入处理后的列表
+        result = await question_agent.generate_practice_set(topic_list, num_questions, difficulty)
+        return {"status": "success", "data": result['message']}
+    except Exception as e:
+        return {"status": "error", "message": f"生成练习题时出错: {str(e)}"}
+
+@app.post("/questionAgent/grade_practice_set")
+async def grade_practice_set(
+    practice_set: str = Form(...),  # 题目集的JSON字符串
+    student_answers: str = Form(...),  # 学生答案集的JSON字符串
+    reference_answers: str = Form(...)  # 参考答案集的JSON字符串
+):
+    """
+    批改练习题集
     
     Args:
-        query (str): 用户的查询内容
+        practice_set: 题目集的JSON字符串
+        reference_answers: 参考答案集的JSON字符串
         
     Returns:
-        dict: 包含分析结果的字典
+        dict: 包含批改结果的字典
         {
-            "status": "success",
-            "data": Any
+            "status": "success"/"error",
+            "data": {
+                "score": float,  # 总分
+                "scoring_points": [  # 得分点详情
+                    {
+                        "id": str,  # 题目ID
+                        "point": str,  # 得分/失分点描述
+                        "score": float,  # 得分
+                        "deduction": float  # 扣分（如果是失分点）
+                    },
+                    ...
+                ],
+                "comments": str,  # 总体评价
+                "suggestions": List[str],  # 改进建议
+                "highlights": List[str]  # 亮点
+            }
         }
     """
     try:
-        result = await question_agent.analyze_knowledge_points(query)
-        return {"status": "success", "data": result}
+        # 解析JSON字符串
+        try:
+            practice_set_data = json.loads(practice_set)
+            reference_answers_data = json.loads(reference_answers)
+            student_answers_data = json.loads(student_answers)
+        except json.JSONDecodeError:
+            return {
+                "status": "error",
+                "message": "输入数据格式错误，请确保是有效的JSON格式"
+            }
+        
+        # 调用question_agent的批改方法
+        result = await question_agent.grade_practice_set(
+            practice_set=practice_set_data,
+            student_answers=student_answers_data,
+            reference_answers=reference_answers_data    
+        )
+        
+        if result["status"] == "success":
+            return {
+                "status": "success",
+                "data": result["message"]
+            }
+        else:
+            return {
+                "status": "error",
+                "message": result["message"]
+            }
+            
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-@app.post("/step_by_step_interactive")
-async def step_by_step_interactive(
-    question: str = Body(...),
-    history: list = Body(default=[])
-):
+        return {
+            "status": "error",
+            "message": f"批改练习题集时出错: {str(e)}"
+        }
+
+# 添加新的下载端点
+@app.get("/download/{filename}")
+async def download_file(filename: str):
     """
-    提供多轮交互式解题指导
+    下载生成的解释文件
     
     Args:
-        question (str): 题目内容
-        history (list): 历史对话记录，格式为[{"role": str, "content": str}, ...]
+        filename: 文件名
         
     Returns:
-        dict: 包含对话历史、当前步骤和是否完成的信息
-        {
-            "history": List[dict],
-            "step": str,
-            "finished": bool
-        }
+        FileResponse: 文件下载响应
     """
-    # 构造 prompt
-    prompt = (
-        f"题目：{question}\n"
-        f"历史对话：\n"
+    file_path = os.path.join(DOCS_DIR, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+        
+    return FileResponse(
+        file_path,
+        media_type='application/octet-stream',
+        filename=filename
     )
-    for h in history:
-        if h["role"] == "user":
-            prompt += f"学生：{h['content']}\n"
-        else:
-            prompt += f"老师：{h['content']}\n"
-    prompt += (
-        "请根据学生的最新回答，给出下一步引导，不要直接给出最终答案。"
-        "如果学生已经答对了，不要再继续提问，直接说'回答正确，解题结束'。"
-    )
-    # 调用 LLM
-    step = await question_agent.chat(prompt)
-    
-    history = list(history)
-    history.append({"role": "assistant", "content": step})
-    # 判断是否结束
-    finished = ("解题结束" in step) or ("回答正确" in step)
-    return {"history": history, "step": step, "finished": finished}
+
+
+
 
 if __name__ == "__main__":
     # 启动后台线程

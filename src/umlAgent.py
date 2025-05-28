@@ -1,7 +1,7 @@
 from agent import Agent
 from utils.logger import MyLogger, logging
 import os
-logger = MyLogger(log_file="logs/uml_agent.log", level=logging.INFO)
+logger = MyLogger( level=logging.INFO)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,21 +10,17 @@ PROJECT_PATH = os.getenv("PROJECT_PATH")
 
 class UML_Agent(Agent):
     def __init__(self, api_key: str, base_url: str, model: str, label: str = None):
+       
+        super().__init__(api_key, base_url, model, label)
+
+    def get_system_prompt(self) -> str:
         system_prompt = f'''
         你是一个UML图生成专家，请根据用户的需求生成UML图。
         对于写文件，你的权限目录是：{os.path.join(PROJECT_PATH, "static")}。
-        每次回复都必须是有效的Json对象，格式如下：
-        
-        
-        {{
-            "url": "图片结果的url地址",
-            "message": "你回复用户的文本内容"
-        }}
-        
-
+        你的最终回复不需要提供生成的UML图的链接或者代码，只需要输出你画的UML图的解释文本，而且要尽可能详细的解释。
         '''
-        self.system_prompt = system_prompt
-        super().__init__(api_key, base_url, model, label, self.system_prompt)
+
+        return super().get_base_system_prompt() + '\n' + system_prompt
 
     async def generate_uml(self, query: str, diagram_type: str):
         try:
@@ -36,11 +32,14 @@ class UML_Agent(Agent):
             
             res = await self.chat(prompt)
             
-            return res # Json对象
+            return res 
         
         except Exception as e:
             logger.error(f"生成UML图时出错: {e}")
-            return f"生成UML图时出错: {str(e)}"
+            return {
+                "status": "error",
+                "message": f"生成UML图时出错: {str(e)}"
+            }
     
     async def getTargetFilePath(self, diagram_type: str) -> str  : # 获取目标图片
         static_dir = os.path.join(PROJECT_PATH, "static", f"{diagram_type}")

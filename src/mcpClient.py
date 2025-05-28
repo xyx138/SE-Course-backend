@@ -7,8 +7,7 @@ from mcp import ClientSession
 
 from utils.logger import MyLogger, logging
 
-logger = MyLogger(log_file="logs/mcp.log", level=logging.INFO)
-
+logger = MyLogger(level=logging.INFO)
 
 
 class MCPClient:
@@ -67,7 +66,7 @@ class MCPClient:
             available = ", ".join(self.tool_names)
             raise ValueError(f"工具 '{tool_name}' 不可用。可用工具: {available}")
         
-        logger.info(f"调用工具 {tool_name}，参数: {args}")
+        # logger.info(f"调用工具 {tool_name}，参数: {args}")
         
         return await self.session.call_tool(tool_name, args)
 

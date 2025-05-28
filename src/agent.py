@@ -15,27 +15,31 @@ load_dotenv()
 
 PROJECT_PATH = os.getenv('PROJECT_PATH')
 
-logger = MyLogger(log_file="logs/app.log", level=logging.INFO)
+logger = MyLogger(level=logging.INFO)
 
-system_prompt = f'''
-你是一个软件工程课程助手
 
-注意：
-1. 项目的根目录为{os.getenv('PROJECT_PATH')}, 所有的文件操作都基于这个根目录。
-2. 操作文件的文件路径参数名是path而不是file_path。move_file的参数分别为source和destination，不要增加path后缀。
-3. 输出文件默认保存到{os.getenv('PROJECT_PATH')}/static
-'''
 
 class Agent():
     '''agent = llm+tool'''
     
-    def __init__(self, api_key:str , base_url:str , model: str = None, label: str = None, system_prompt = system_prompt) -> None:
+    @staticmethod
+    def get_base_system_prompt() -> str:
+        """获取基础系统提示词"""
+        return f'''
+        注意：
+        1. 项目的根目录为{os.getenv('PROJECT_PATH')}, 所有的文件操作都基于这个根目录。
+        2. 操作文件的文件路径参数名是path而不是file_path。move_file的参数分别为source和destination，不要增加path后缀。
+        3. 输出文件默认保存到{os.getenv('PROJECT_PATH')}/static
+        4. fetch_webpage的参数为result_id而不是id
+        '''
+
+    def __init__(self, api_key:str , base_url:str , model: str = None, label: str = None) -> None:
         '''初始化 llm 客户端和 mcp 客户端'''
 
         logger.info("初始化LLM和MCP客户端")
 
 
-        self.system_prompt = system_prompt
+        self.system_prompt = self.get_system_prompt()
         self.llmClient = LLMClient(api_key, base_url, model, system_prompt=self.system_prompt)
         
         mcp_servers = load_mcp_config(PROJECT_PATH + '/mcp.json')['mcpServers']
@@ -47,6 +51,9 @@ class Agent():
 
         self.retriever = Retriever(similarity_threshold=0.5)
         self.label = None
+
+    def get_system_prompt(self) -> str:
+        return self.get_base_system_prompt()
 
     async def getMessages(self):
         return await self.llmClient.getMessages()
@@ -127,6 +134,7 @@ class Agent():
             
             tool_calls = res.choices[0].message.tool_calls
 
+            # 多次调用工具
             while tool_calls:
                 logger.info("调用工具")
                 tool_names = [tool.function.name for tool in tool_calls]
@@ -205,15 +213,23 @@ class Agent():
                                     tool_call_id=tool_call.id
                                 )
 
+                # llm决定是否继续调用工具
                 res = await self.llmClient.chat(message=None, tools=self.tools)
                 tool_calls = res.choices[0].message.tool_calls if res.choices[0].message.tool_calls else None
             
             logger.info("回复结果")
-            await self.write_messages() # 写入上下文信息
-            return res.choices[0].message.content
+            # await self.write_messages() # 写入上下文信息
+            return {
+                "status": "success",
+                "message": res.choices[0].message.content
+            }
+        
         except Exception as e:
             logger.error(f"聊天过程中出错: {e}")
-            return f"处理请求时出错: {str(e)}"
+            return {
+                "status": "error",
+                "message": {e}
+            }
 
     async def delete_index(self, label: str):
         res = self.retriever.delete_index(label)
