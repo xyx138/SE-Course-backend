@@ -1,5 +1,6 @@
 import asyncio
 import os
+import platform
 from contextlib import AsyncExitStack
 
 from mcp.client.stdio import stdio_client, StdioServerParameters
@@ -9,6 +10,8 @@ from utils.logger import MyLogger, logging
 
 logger = MyLogger(level=logging.INFO)
 
+# 检测是否为Windows环境
+IS_WINDOWS = platform.system() == "Windows"
 
 class MCPClient:
     def __init__(self, command: str, args: list[str]):
@@ -29,11 +32,20 @@ class MCPClient:
                 return
 
             logger.info(f"开始连接服务器: {self.command} {' '.join(self.args)}")
+            
+            # 设置环境变量
+            env = os.environ.copy()
+            if IS_WINDOWS:
+                # Windows环境下可能需要额外设置
+                env["PYTHONIOENCODING"] = "utf-8"
+                
             server_params = StdioServerParameters(
                 command=self.command,
                 args=self.args,
-                env=os.environ.copy()
+                env=env,
+                shell=IS_WINDOWS  # Windows下使用shell=True可能更可靠
             )
+            
             try:
                 # 1. 使用 stdio_client 获取 stdio, write
                 stdio, write = await self.exit_stack.enter_async_context(
@@ -57,6 +69,8 @@ class MCPClient:
                 self._connected = True
             except Exception as e:
                 logger.error(f"连接服务器失败: {e}")
+                if IS_WINDOWS and isinstance(e, FileNotFoundError) and self.command in ["npx", "npx.cmd"]:
+                    logger.error("Windows环境下可能需要全局安装相关NPM包，请尝试运行: npm install -g @modelcontextprotocol/server-filesystem")
                 raise
 
     async def call_tool(self, tool_name: str, args: dict):
@@ -68,7 +82,18 @@ class MCPClient:
         
         # logger.info(f"调用工具 {tool_name}，参数: {args}")
         
-        return await self.session.call_tool(tool_name, args)
+        try:
+            return await self.session.call_tool(tool_name, args)
+        except Exception as e:
+            logger.error(f"调用工具 {tool_name} 失败: {e}")
+            # Windows环境下可能需要特殊处理路径参数
+            if IS_WINDOWS and "path" in args:
+                # 尝试修复路径格式
+                if isinstance(args["path"], str):
+                    args["path"] = args["path"].replace('/', '\\')
+                    logger.info(f"尝试使用Windows路径格式重新调用: {args['path']}")
+                    return await self.session.call_tool(tool_name, args)
+            raise
 
     def have_tool(self, tool_name: str) -> bool:
         return tool_name in self.tool_names
@@ -83,7 +108,7 @@ class MCPClient:
 
 async def main():
     # 测试 MCPClient
-    command = 'npx'
+    command = 'npx.cmd' if IS_WINDOWS else 'npx'
     args = ['-y', '@modelcontextprotocol/server-filesystem', os.getcwd()]
     client = MCPClient(command, args)
     try:
@@ -92,8 +117,9 @@ async def main():
         for tool in client.getTool():
             print(f"工具: {tool.name} - {tool.description}")
         # 调用 read_file
-        if await client.have_tool('read_file'):
-            res = await client.call_tool('read_file', {'path': '/home/wslxyx2/mcp-client/src/public/baidu_魔女之旅_content.txt'})
+        test_file = os.path.join(os.getcwd(), 'README.md')
+        if client.have_tool('read_file'):
+            res = await client.call_tool('read_file', {'path': test_file})
             print(res.content)
     except Exception as e:
         logger.error(f"测试过程中出错: {e}")

@@ -47,18 +47,29 @@
    npm -v # 10.9.2
    ```
 
-5. 安装 docker
+5. docker相关
+   1. [安装docker](https://www.docker.com/)
+   2. 进入终端，执行下列命令
+      ```bash
+      docker pull plantuml/plantuml-server:jetty
+      ```
 
 
-5. 修改配置文件
+6. 修改配置文件
 
-   复制`.env.example`到同级目录下，并更名为`.env`, 将其中的**api和项目路径**改为自己的，创建api可以参考下面的文档
+   复制`.env.example`并重命名为`.env`, 完善`.env`的内容
 
    [千问api权限获取和创建](https://help.aliyun.com/zh/model-studio/get-api-key?spm=a2c4g.11186623.0.0.374f6401cARvVK)
 
-6. 启动项目
+7. 启动项目
 
    ```bash
    uv run scripts/run.py
    ```
+
+## 📚 参考文献
+
+- [Anthropic MCP 协议文档](https://docs.anthropic.com/zh-CN/docs/agents-and-tools/mcp)
+- [检索增强生成 (RAG) 概述](https://scriv.ai/guides/retrieval-augmented-generation-overview/)
+- [OpenAI API 参考文档](https://platform.openai.com/docs/api-reference/responses)
 

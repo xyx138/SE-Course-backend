@@ -2,6 +2,7 @@ import json
 import os
 from dotenv import load_dotenv
 import re
+import platform
 
 load_dotenv()
 
@@ -23,7 +24,12 @@ def load_mcp_config(config_path: str) -> dict[str, dict]:
 
         def replace_env_vars(match):
             var_name = match.group(1)
-            return os.getenv(var_name)
+            value = os.getenv(var_name)
+            # 处理Windows路径
+            if platform.system() == "Windows" and '\\' in str(value):
+                # 在JSON字符串中，需要将反斜杠转义
+                value = value.replace('\\', '\\\\')
+            return value
  
         config_str = re.sub(r'\$\{([^}]+)\}', replace_env_vars, json.dumps(config))
 
