@@ -64,7 +64,8 @@
 7. 启动项目
 
    ```bash
-   uv run scripts/run.py
+   docker run -d -p 8080:8080 plantuml/plantuml-server:jetty # 启动docker容器
+   uv run src/api.py # 启动后端服务
    ```
 
 ## 📚 参考文献
