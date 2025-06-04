@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 import os
 import asyncio
 # import aiomysql
-from agent import Agent
+from agents.agent import Agent
 from enum import Enum
 import json
 from typing import Dict, List, Optional, Union
@@ -25,7 +25,9 @@ class questionAgent(Agent):
     """软件工程习题解答助手"""
     
     def __init__(self, api_key: str, base_url: str, model: str = None, label: str = None) -> None:
-        super().__init__(api_key, base_url, model, label)
+        super().__init__(api_key, base_url, model, label, [
+            "memory"
+        ])
         
     def get_system_prompt(self) -> str:
         return super().get_base_system_prompt() + """你是一个专业的软件工程教育专家，擅长出题和批改试题。

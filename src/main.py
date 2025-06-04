@@ -10,7 +10,7 @@ import shutil
 import httpx
 import requests
 # 导入你的 Agent 相关模块
-from questionAgent import questionAgent
+from agents.questionAgent import questionAgent
 from retrieve import Retriever
 from vectorStore import VectorStore
 from enum import Enum
@@ -38,6 +38,202 @@ class ExplainStyle(str, Enum):
     EXAMPLE = "示例讲解"
     VISUAL = "可视化解释"
     COMPARATIVE = "对比解释"
+
+
+
+# 修改 search_papers 函数，使其结果更易读
+async def search_papers(topic: str, max_results: int) -> tuple:
+    """搜索论文并返回格式化结果"""
+    try:
+        api_url = "http://localhost:8000/paperAgent/search_papers"
+        data = {
+            "topic": topic,
+            "max_results": max_results
+        }
+        
+        timeout = httpx.Timeout(120.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(api_url, data=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result["status"] == "success":
+                    # 创建易读的格式化输出
+                    formatted_output = f"## 🔍 '{topic}' 相关论文搜索结果\n\n"
+                    
+                    # 解析结果，尝试提取论文列表
+                    message = result.get("message", "")
+                    
+                    # 返回格式化的搜索结果和状态
+                    return (
+                        "✅ 搜索完成",
+                        message
+                    )
+                else:
+                    return (
+                        f"❌ 搜索失败: {result.get('message', '未知错误')}",
+                        "搜索论文时出错，请稍后重试。"
+                    )
+            else:
+                return (
+                    f"❌ 请求失败: HTTP {response.status_code}",
+                    f"服务器响应错误: {response.text}"
+                )
+                
+    except Exception as e:
+        print(f"Error in search_papers: {str(e)}")
+        return (
+            f"❌ 出错: {str(e)}",
+            "搜索论文时发生错误，请稍后重试。"
+        )
+
+# 类似地修改其他函数
+async def download_and_read_paper(paper_id: str) -> tuple:
+    """下载并阅读论文，返回格式化结果"""
+    try:
+        api_url = "http://localhost:8000/paperAgent/download_and_read_paper"
+        data = {
+            "paper_id": paper_id
+        }
+        
+        timeout = httpx.Timeout(120.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(api_url, data=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result["status"] == "success":
+                    return (
+                        "✅ 论文获取成功",
+                        result["message"]
+                    )
+                else:
+                    return (
+                        f"❌ 获取失败: {result.get('message', '未知错误')}",
+                        "获取论文详情时出错，请检查论文ID是否正确。"
+                    )
+            else:
+                return (
+                    f"❌ 请求失败: HTTP {response.status_code}",
+                    f"服务器响应错误: {response.text}"
+                )
+                
+    except Exception as e:
+        print(f"Error in download_and_read_paper: {str(e)}")
+        return (
+            f"❌ 出错: {str(e)}",
+            "获取论文详情时发生错误，请稍后重试。"
+        )
+
+async def list_and_organize_papers() -> tuple:
+    """列出并组织论文，返回格式化结果"""
+    try:
+        api_url = "http://localhost:8000/paperAgent/list_and_organize_papers"
+        
+        timeout = httpx.Timeout(120.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(api_url)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result["status"] == "success":
+                    return (
+                        "✅ 论文库整理完成",
+                        result["message"]
+                    )
+                else:
+                    return (
+                        f"❌ 整理失败: {result.get('message', '未知错误')}",
+                        "整理论文库时出错，请稍后重试。"
+                    )
+            else:
+                return (
+                    f"❌ 请求失败: HTTP {response.status_code}",
+                    f"服务器响应错误: {response.text}"
+                )
+                
+    except Exception as e:
+        print(f"Error in list_and_organize_papers: {str(e)}")
+        return (
+            f"❌ 出错: {str(e)}",
+            "整理论文库时发生错误，请稍后重试。"
+        )
+
+async def analyze_paper_for_project(paper_id: str, project_description: str) -> tuple:
+    """分析论文对项目的应用价值，返回格式化结果"""
+    try:
+        api_url = "http://localhost:8000/paperAgent/analyze_paper_for_project"
+        data = {
+            "paper_id": paper_id,
+            "project_description": project_description
+        }
+        
+        timeout = httpx.Timeout(120.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(api_url, data=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result["status"] == "success":
+                    return (
+                        "✅ 应用价值分析完成",
+                        result["message"]
+                    )
+                else:
+                    return (
+                        f"❌ 分析失败: {result.get('message', '未知错误')}",
+                        "分析论文应用价值时出错，请稍后重试。"
+                    )
+            else:
+                return (
+                    f"❌ 请求失败: HTTP {response.status_code}",
+                    f"服务器响应错误: {response.text}"
+                )
+                
+    except Exception as e:
+        print(f"Error in analyze_paper_for_project: {str(e)}")
+        return (
+            f"❌ 出错: {str(e)}",
+            "分析论文应用价值时发生错误，请稍后重试。"
+        )
+
+async def recommend_learning_path(topic: str) -> tuple:
+    """推荐学习路径，返回格式化结果"""
+    try:
+        api_url = "http://localhost:8000/paperAgent/recommend_learning_path"
+        data = {
+            "topic": topic
+        }
+        
+        timeout = httpx.Timeout(120.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(api_url, data=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result["status"] == "success":
+                    return (
+                        "✅ 学习路径生成完成",
+                        result["message"]
+                    )
+                else:
+                    return (
+                        f"❌ 生成失败: {result.get('message', '未知错误')}",
+                        "生成学习路径时出错，请稍后重试。"
+                    )
+            else:
+                return (
+                    f"❌ 请求失败: HTTP {response.status_code}",
+                    f"服务器响应错误: {response.text}"
+                )
+                
+    except Exception as e:
+        print(f"Error in recommend_learning_path: {str(e)}")
+        return (
+            f"❌ 出错: {str(e)}",
+            "生成学习路径时发生错误，请稍后重试。"
+        )
+
 
 # 修改API调用函数
 async def get_concept_explanation(concept: str, style: str) -> dict:
@@ -578,6 +774,69 @@ with gr.Blocks(
         position: absolute;
         left: 0;
         font-size: 0.875rem;
+    }
+
+    /* 论文助手样式 */
+    #paper_tab .container {
+        background-color: white;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        padding: 20px;
+    }
+
+    .paper-result {
+        border: 1px solid #e0e0e0;
+        padding: 15px;
+        margin-bottom: 15px;
+        border-radius: 8px;
+        background: #f9f9f9;
+    }
+
+    .paper-result h3 {
+        margin-top: 0;
+        color: #4b6cb7;
+    }
+
+    .paper-result .authors {
+        color: #666;
+        font-style: italic;
+        margin-bottom: 10px;
+    }
+
+    .paper-result .summary {
+        margin-top: 10px;
+    }
+
+    .paper-result .actions {
+        margin-top: 15px;
+        text-align: right;
+    }
+
+    .paper-detail {
+        background: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    }
+
+    .paper-detail h2 {
+        color: #4b6cb7;
+        border-bottom: 2px solid #e0e0e0;
+        padding-bottom: 10px;
+        margin-bottom: 20px;
+    }
+
+    .learning-path-section {
+        margin-bottom: 20px;
+        padding: 15px;
+        background: #f0f7ff;
+        border-radius: 8px;
+        border-left: 4px solid #4b6cb7;
+    }
+
+    .learning-path-section h3 {
+        margin-top: 0;
+        color: #4b6cb7;
     }
     """
 ) as app:   
@@ -1423,7 +1682,244 @@ with gr.Blocks(
                 ]
             )
 
-        # 5. 知识库管理
+    
+        # 5. 论文助手
+        with gr.TabItem("📄 论文助手", id="paper_tab") as paper_tab:
+            with gr.Tabs() as paper_tabs:
+                # 6.1 论文搜索
+                with gr.TabItem("🔍 论文搜索", id="paper_search_tab"):
+                    with gr.Row():
+                        # 左侧输入区域
+                        with gr.Column(scale=2):
+                            search_topic = gr.Textbox(
+                                label="研究主题",
+                                placeholder="请输入要搜索的研究主题或关键词...",
+                                lines=2
+                            )
+                            with gr.Row():
+                                max_results = gr.Slider(
+                                    minimum=1,
+                                    maximum=20,
+                                    value=5,
+                                    step=1,
+                                    label="最大结果数量"
+                                )
+                                search_btn = gr.Button("搜索论文", variant="primary")
+                            
+                            # 使用说明
+                            with gr.Accordion("💡 使用说明", open=False):
+                                gr.Markdown("""
+                                ### 使用说明
+                                1. 输入您感兴趣的研究主题或关键词
+                                2. 调整结果数量（建议5-10篇为宜）
+                                3. 点击"搜索论文"按钮
+                                4. 查看右侧的搜索结果
+                                5. 点击"查看详情"可以阅读论文的详细内容
+                                """)
+                        
+                        # 右侧结果区域
+                        with gr.Column(scale=3):
+                            # 状态显示
+                            search_status = gr.Markdown("准备就绪")
+                            
+                            # 搜索结果
+                            search_results = gr.Markdown()
+                    
+                    # 绑定搜索按钮事件
+                    search_btn.click(
+                        lambda: "🤔 正在搜索论文...",
+                        None,
+                        search_status
+                    ).then(
+                        search_papers,
+                        inputs=[
+                            search_topic,
+                            max_results
+                        ],
+                        outputs=[
+                            search_status,
+                            search_results
+                        ]
+                    )
+                
+                # 6.2 论文详情
+                with gr.TabItem("📝 论文详情", id="paper_detail_tab"):
+                    with gr.Row():
+                        # 左侧输入区域
+                        with gr.Column(scale=2):
+                            paper_id = gr.Textbox(
+                                label="论文ID",
+                                placeholder="请输入论文ID...",
+                                lines=1
+                            )
+                            detail_btn = gr.Button("查看详情", variant="primary")
+                            
+                            # 使用说明
+                            with gr.Accordion("💡 使用说明", open=False):
+                                gr.Markdown("""
+                                ### 使用说明
+                                1. 输入从搜索结果中获得的论文ID
+                                2. 点击"查看详情"按钮
+                                3. 右侧将显示论文的详细内容，包括摘要、方法、结论等
+                                """)
+                        
+                        # 右侧结果区域
+                        with gr.Column(scale=3):
+                            # 状态显示
+                            detail_status = gr.Markdown("准备就绪")
+                            
+                            # 论文详情
+                            paper_detail = gr.Markdown()
+                    
+                    # 绑定详情按钮事件
+                    detail_btn.click(
+                        lambda: "🤔 正在获取论文详情...",
+                        None,
+                        detail_status
+                    ).then(
+                        download_and_read_paper,
+                        inputs=[paper_id],
+                        outputs=[
+                            detail_status,
+                            paper_detail
+                        ]
+                    )
+                
+                # 6.3 论文库管理
+                with gr.TabItem("📚 论文库管理", id="paper_library_tab"):
+                    with gr.Row():
+                        # 左侧按钮区域
+                        with gr.Column(scale=1):
+                            organize_btn = gr.Button("整理论文库", variant="primary", size="lg")
+                            
+                            # 使用说明
+                            with gr.Accordion("💡 使用说明", open=False):
+                                gr.Markdown("""
+                                ### 使用说明
+                                1. 点击"整理论文库"按钮
+                                2. 系统将自动整理您已下载的所有论文
+                                3. 右侧将显示按主题分类的论文列表
+                                """)
+                        
+                        # 右侧结果区域
+                        with gr.Column(scale=4):
+                            # 状态显示
+                            organize_status = gr.Markdown("准备就绪")
+                            
+                            # 整理结果
+                            organize_results = gr.Markdown()
+                    
+                    # 绑定整理按钮事件
+                    organize_btn.click(
+                        lambda: "🤔 正在整理论文库...",
+                        None,
+                        organize_status
+                    ).then(
+                        list_and_organize_papers,
+                        outputs=[
+                            organize_status,
+                            organize_results
+                        ]
+                    )
+                
+                # 6.4 项目应用分析
+                with gr.TabItem("🔬 项目应用分析", id="paper_project_tab"):
+                    with gr.Row():
+                        # 左侧输入区域
+                        with gr.Column(scale=2):
+                            project_paper_id = gr.Textbox(
+                                label="论文ID",
+                                placeholder="请输入论文ID...",
+                                lines=1
+                            )
+                            project_description = gr.Textbox(
+                                label="项目描述",
+                                placeholder="请描述您的软件工程项目...",
+                                lines=5
+                            )
+                            analyze_btn = gr.Button("分析应用价值", variant="primary")
+                            
+                            # 使用说明
+                            with gr.Accordion("💡 使用说明", open=False):
+                                gr.Markdown("""
+                                ### 使用说明
+                                1. 输入论文ID和您的软件工程项目描述
+                                2. 点击"分析应用价值"按钮
+                                3. 系统将分析该论文如何应用到您的项目中
+                                4. 右侧将显示具体的应用建议
+                                """)
+                        
+                        # 右侧结果区域
+                        with gr.Column(scale=3):
+                            # 状态显示
+                            analyze_status = gr.Markdown("准备就绪")
+                            
+                            # 分析结果
+                            analyze_results = gr.Markdown()
+                    
+                    # 绑定分析按钮事件
+                    analyze_btn.click(
+                        lambda: "🤔 正在分析论文应用价值...",
+                        None,
+                        analyze_status
+                    ).then(
+                        analyze_paper_for_project,
+                        inputs=[
+                            project_paper_id,
+                            project_description
+                        ],
+                        outputs=[
+                            analyze_status,
+                            analyze_results
+                        ]
+                    )
+                
+                # 6.5 学习路径
+                with gr.TabItem("🧠 学习路径", id="learning_path_tab"):
+                    with gr.Row():
+                        # 左侧输入区域
+                        with gr.Column(scale=2):
+                            learning_topic = gr.Textbox(
+                                label="学习主题",
+                                placeholder="请输入您想学习的主题...",
+                                lines=2
+                            )
+                            path_btn = gr.Button("生成学习路径", variant="primary")
+                            
+                            # 使用说明
+                            with gr.Accordion("💡 使用说明", open=False):
+                                gr.Markdown("""
+                                ### 使用说明
+                                1. 输入您想深入学习的软件工程相关主题
+                                2. 点击"生成学习路径"按钮
+                                3. 系统将为您生成一个从入门到高级的学习路径
+                                4. 路径中会包含推荐阅读的论文顺序和关键概念
+                                """)
+                        
+                        # 右侧结果区域
+                        with gr.Column(scale=3):
+                            # 状态显示
+                            path_status = gr.Markdown("准备就绪")
+                            
+                            # 学习路径
+                            learning_path_results = gr.Markdown()
+                    
+                    # 绑定路径按钮事件
+                    path_btn.click(
+                        lambda: "🤔 正在生成学习路径...",
+                        None,
+                        path_status
+                    ).then(
+                        recommend_learning_path,
+                        inputs=[learning_topic],
+                        outputs=[
+                            path_status,
+                            learning_path_results
+                        ]
+                    )
+
+
+        # 6. 知识库管理
         with gr.TabItem("📚 知识库管理", id="kb_tab") as kb_tab:  
             with gr.Row():  
                 # 左侧知识库管理功能
@@ -1528,7 +2024,8 @@ with gr.Blocks(
                 fn=init_knowledge_bases,
                 outputs=[kb_name_dropdown, delete_kb_name, kb_list]
             )
-            
+
+    
 
 
     chat_tab.select(
@@ -1548,10 +2045,12 @@ with gr.Blocks(
     )
 
 
+
 if __name__ == "__main__":
     # 启动Gradio应用
     app.launch(
         share=False,
-        server_name="0.0.0.0",
+        server_name="127.0.0.1",
         server_port=7860,
+        # debug=True
     )

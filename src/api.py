@@ -1,4 +1,4 @@
-from agent import Agent 
+from agents.agent import Agent 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter, Body
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
@@ -12,16 +12,16 @@ from typing import List, Any, Callable, TypeVar, Awaitable
 import shutil
 import concurrent.futures
 import functools
-from umlAgent import UML_Agent
+from agents.umlAgent import UML_Agent
 from fastapi.staticfiles import StaticFiles
 from enum import Enum
 from fastapi import Query
-from questionAgent import questionAgent
-from explainAgent import ExplainAgent
+from agents.questionAgent import questionAgent
+from agents.explainAgent import ExplainAgent
 from typing import Optional
 import json
-from questionAgent import QuestionDifficulty, QuestionType
-
+from agents.questionAgent import QuestionDifficulty, QuestionType
+from agents.paperAgent import PaperAgent
 load_dotenv()
 api_key = os.getenv("DASHSCOPE_API_KEY")
 base_url = os.getenv("DASHSCOPE_BASE_URL")
@@ -30,6 +30,9 @@ model = 'qwen-plus'
 # 确保必要的目录存在
 KNOWLEDGE_DIR = os.path.join(os.getenv("PROJECT_PATH"), "knowledge_base")
 VECTOR_STORE_DIR = os.path.join(os.getenv("PROJECT_PATH"), "VectorStore")
+
+os.makedirs(KNOWLEDGE_DIR, exist_ok=True)
+os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
 
 PROJECT_ROOT = os.getenv("PROJECT_PATH")
 
@@ -42,8 +45,9 @@ agent_ready = threading.Event()
 umlAgent = UML_Agent(api_key, base_url, model)
 explainAgent = ExplainAgent(api_key, base_url, model)
 question_agent = questionAgent(api_key, base_url, model)
+paper_agent = PaperAgent()
 
-agents = [agent, umlAgent, explainAgent, question_agent]
+agents = [agent, umlAgent, explainAgent, question_agent, paper_agent]
 
 
 # 保存全局事件循环引用
@@ -244,16 +248,7 @@ async def chat(message: str = Form(...)):
         # 在Agent线程的事件循环中执行异步函数
         response = await run_in_agent_thread(agent.chat, message, timeout=300)
         
-        # 检查并处理返回值类型
-        if response is None:
-            return {"status": "error", "message": "Agent 返回了空回复"}
-        elif isinstance(response, str):
-            return {"status": "success", "message": response}
-        else:
-            try:
-                return {"status": "success", "message": str(response)}
-            except:
-                return {"status": "error", "message": "无法处理 Agent 返回的非字符串格式回复"}
+        return {"status": "success", "message": response['message']}
     except concurrent.futures.TimeoutError:
         return {"status": "error", "message": "请求超时，请尝试简化问题或稍后重试"}
     except Exception as e:
@@ -584,6 +579,65 @@ async def grade_practice_set(
             "status": "error",
             "message": f"批改练习题集时出错: {str(e)}"
         }
+
+@app.post("/paperAgent/search_papers")
+async  def search_papers(topic: str = Form(...), max_results: int = Form(...)):
+    """
+    搜索论文
+    """
+    try:
+        result = await run_in_agent_thread(paper_agent.search_papers_by_topic, topic, max_results, timeout=120)
+        return {"status": "success", "message": result['message']}
+    except Exception as e:
+        return {"status": "error", "message": f"搜索论文时出错: {str(e)}"}
+
+@app.post("/paperAgent/download_and_read_paper")
+async def download_and_read_paper(paper_id: str = Form(...)):
+    """
+    获取论文详情
+    """
+    try:
+        result = await run_in_agent_thread(paper_agent.download_and_read_paper, paper_id, timeout=120)
+        return {"status": "success", "message": result['message']}
+    except Exception as e:
+        return {"status": "error", "message": f"下载和阅读论文时出错: {str(e)}"}
+
+@app.post("/paperAgent/list_and_organize_papers")
+async def list_and_organize_papers():
+    """
+    列出并组织论文
+    """
+    try:
+        result = await run_in_agent_thread(paper_agent.list_and_organize_papers, timeout=120)
+        return {"status": "success", "message": result['message']}
+    except Exception as e:
+        return {"status": "error", "message": f"列出和组织论文时出错: {str(e)}"}        
+    
+
+@app.post("/paperAgent/analyze_paper_for_project")
+async def analyze_paper_for_project(paper_id: str = Form(...), project_description: str = Form(...)):
+    """
+    分析论文对特定项目的应用价值
+    """
+    try:
+        result = await run_in_agent_thread(paper_agent.analyze_paper_for_project, paper_id, project_description, timeout=120)
+        return {"status": "success", "message": result['message']}
+    except Exception as e:
+        return {"status": "error", "message": f"分析论文对特定项目的应用价值时出错: {str(e)}"}
+     
+
+@app.post("/paperAgent/recommend_learning_path")
+async def recommend_learning_path(topic: str = Form(...)):
+    """
+    推荐学习路径
+    """
+    try:
+        result = await run_in_agent_thread(paper_agent.recommend_learning_path, topic, timeout=120)
+        return {"status": "success", "message": result['message']}
+    except Exception as e:
+        return {"status": "error", "message": f"推荐学习路径时出错: {str(e)}"}
+
+
 
 # 添加新的下载端点
 @app.get("/download/{filename}")

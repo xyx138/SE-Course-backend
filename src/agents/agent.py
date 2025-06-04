@@ -1,23 +1,36 @@
+import sys
+import os
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+
 from llmClient import LLMClient
 from mcpClient import MCPClient
 from utils.load_json import load_mcp_config
 from utils.logger import MyLogger, logging
 from collections import defaultdict
 from dotenv import load_dotenv
-import os
 import asyncio
-import sys
 from asyncio import CancelledError
 import json
 from retrieve import Retriever
-
+from typing import List
 load_dotenv()
 
 PROJECT_PATH = os.getenv('PROJECT_PATH')
 
+
+
 logger = MyLogger(level=logging.INFO)
 
-
+all_servers = [
+    "filesystem",
+    "UML-MCP-Server",
+    "bingcn",
+    "fetch",
+    "memory",
+    "time"
+]
 
 class Agent():
     '''agent = llm+tool'''
@@ -33,21 +46,23 @@ class Agent():
         4. fetch_webpage的参数为result_id而不是id
         '''
 
-    def __init__(self, api_key:str , base_url:str , model: str = None, label: str = None) -> None:
+    def __init__(self, api_key:str = os.getenv("DASHSCOPE_API_KEY"), base_url:str = os.getenv("DASHSCOPE_BASE_URL"), model: str = "qwen-plus", label: str = None, mcp_servers: List[str] = all_servers) -> None:
         '''初始化 llm 客户端和 mcp 客户端'''
 
         logger.info("初始化LLM和MCP客户端")
 
-
+        self.mcp_servers = mcp_servers
         self.system_prompt = self.get_system_prompt()
         self.llmClient = LLMClient(api_key, base_url, model, system_prompt=self.system_prompt)
         
         mcp_servers = load_mcp_config(PROJECT_PATH + '/mcp.json')['mcpServers']
         self.mcp_clients = defaultdict(MCPClient)
+        
         self.tools = []
         for server_name, config in mcp_servers.items():
-            command, args = config['command'], config['args']
-            self.mcp_clients[server_name] = MCPClient(command, args)
+            if server_name in self.mcp_servers:
+                command, args = config['command'], config['args']
+                self.mcp_clients[server_name] = MCPClient(command, args)
 
         self.retriever = Retriever(similarity_threshold=0.5)
         self.label = None
@@ -287,8 +302,8 @@ async def main():
     agent = Agent(api_key, base_url, model)
     await agent.setup()
     # 这里可以添加更多使用 agent 的代码
-    res = await agent.chat(prompt)
-    print(f"回复结果为：{res}")
+    # res = await agent.chat(prompt)
+    # print(f"回复结果为：{res}")
 
 
 if __name__ == "__main__":

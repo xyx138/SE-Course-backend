@@ -25,6 +25,29 @@
         "fetch": {
             "command": "uvx",
             "args": [ "mcp-server-fetch"]
+        },
+        "memory": {
+            "command": "npx.cmd",
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-memory"
+            ],
+            "env": {
+                "MEMORY_FILE_PATH": "${PROJECT_PATH}\\static\\memory.json"
+            }
+        },
+        "time": {
+            "command": "uvx",
+            "args": ["mcp-server-time", "--local-timezone=Asia/Shanghai"]
+        },
+        "arxiv-mcp-server": {
+            "command": "uv",
+            "args": [
+                "tool",
+                "run",
+                "arxiv-mcp-server",
+                "--storage-path", "${PROJECT_PATH}\\static\\papers"
+            ]
         }
     }
 }

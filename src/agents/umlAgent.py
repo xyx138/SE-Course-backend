@@ -1,4 +1,4 @@
-from agent import Agent
+from agents.agent import Agent
 from utils.logger import MyLogger, logging
 import os
 logger = MyLogger( level=logging.INFO)
@@ -11,7 +11,10 @@ PROJECT_PATH = os.getenv("PROJECT_PATH")
 class UML_Agent(Agent):
     def __init__(self, api_key: str, base_url: str, model: str, label: str = None):
        
-        super().__init__(api_key, base_url, model, label)
+        super().__init__(api_key, base_url, model, label, [
+            "filesystem",
+            "UML-MCP-Server",
+        ])
 
     def get_system_prompt(self) -> str:
         system_prompt = f'''
