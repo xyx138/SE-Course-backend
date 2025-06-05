@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from llmClient import LLMClient
 from mcpClient import MCPClient
 from utils.load_json import load_mcp_config
-from utils.logger import MyLogger, logging
+from utils.logger import MyLogger, logging, Colors
 from collections import defaultdict
 from dotenv import load_dotenv
 import asyncio
@@ -19,9 +19,8 @@ load_dotenv()
 
 PROJECT_PATH = os.getenv('PROJECT_PATH')
 
-
-
-logger = MyLogger(level=logging.INFO)
+# 创建彩色日志记录器
+logger = MyLogger(name="Agent", level=logging.INFO, colored=True)
 
 all_servers = [
     "filesystem",
@@ -48,9 +47,6 @@ class Agent():
 
     def __init__(self, api_key:str = os.getenv("DASHSCOPE_API_KEY"), base_url:str = os.getenv("DASHSCOPE_BASE_URL"), model: str = "qwen-plus", label: str = None, mcp_servers: List[str] = all_servers) -> None:
         '''初始化 llm 客户端和 mcp 客户端'''
-
-        logger.info("初始化LLM和MCP客户端")
-
         self.mcp_servers = mcp_servers
         self.system_prompt = self.get_system_prompt()
         self.llmClient = LLMClient(api_key, base_url, model, system_prompt=self.system_prompt)
@@ -80,15 +76,13 @@ class Agent():
         args:
             label: 索引标签
         '''
-
         self.label = label
-        print(f"成功挂载知识库：{self.label}")
+        logger.success(f"成功挂载知识库：{self.label}")
 
     async def write_messages(self):
         '''
         把上下文写入到文件
         '''
-
         all_text = [f"{message['role']}: {message['content']}" for message in self.llmClient.messages]
         all_text = '\n'.join(all_text)
 
@@ -97,26 +91,21 @@ class Agent():
         log_messages_file = f"{log_messages_dir}/messages.json"
         with open(log_messages_file, "w") as f:
             f.write(all_text)
+        
+        logger.info(f"上下文已保存到: {logger.color_text(log_messages_file, 'CYAN')}")
             
-
     async def setup(self):
         # 启动所有服务，并记录所有工具
-
-        logger.info("启动MCP服务器")
-
         try:
             for name in self.mcp_clients:
                 mcp_client = self.mcp_clients[name]
                 await mcp_client.connect_to_server()
             
-            
             for name, client in self.mcp_clients.items():
                 tools = client.getTool()
-                # print(f"获取到的工具为：{tools}")
                 self.tools.extend([
                     {
                         "type": "function",
-
                         "function":{
                         "name" : tool.name,
                         "description": tool.description,
@@ -125,62 +114,62 @@ class Agent():
                     }
                 
                 for tool in tools])
-            print(f"获取到的工具数量为：{len(self.tools)}")
+            
+            # 添加初始化完成的日志，显示 Agent 类型
+            agent_type = self.__class__.__name__
+            tool_count = logger.color_text(str(len(self.tools)), "YELLOW")
+            logger.success(f"{agent_type} 初始化完成，可用工具数量: {tool_count}")
 
         except Exception as e:
             # 异常处理代码
-            print(f"发生错误: {e}")
-            # 可能的恢复策略
+            agent_type = self.__class__.__name__
+            error_msg = logger.color_text(str(e), "RED")
+            logger.error(f"{agent_type} 初始化失败: {error_msg}")
     
     async def chat(self, query: str) -> str:
         try:
-            logger.info(f"开始检索")
-            print(f"检索的标签为：{self.label}")
+            logger.info(f"检索标签: {logger.color_text(self.label or '无', 'CYAN')}")
             chunk_text = self.retriever.retrieve(query, self.label)
-            print(f"检索结果为：{chunk_text}")
+            
+            if chunk_text:
+                logger.info(f"获取到检索结果 ({logger.color_text(str(len(chunk_text)), 'YELLOW')} 字符)")
+            else:
+                logger.warning("未获取到检索结果")
 
             prompt = f"根据以下检索结果，回答用户的问题：\n{chunk_text}\n用户的问题是：{query}"
-
-            logger.info(f"调用LLM")
-
             
-
             res = await self.llmClient.chat(message=prompt, tools=self.tools)
             
             tool_calls = res.choices[0].message.tool_calls
 
             # 多次调用工具
             while tool_calls:
-                logger.info("调用工具")
                 tool_names = [tool.function.name for tool in tool_calls]
-
-                print(f"调用的工具包括：{tool_names}")
+                tool_names_str = ", ".join([logger.color_text(name, "CYAN") for name in tool_names])
+                logger.info(f"正在调用工具: {tool_names_str}")
+                
                 # 确保工具调用在主线程中执行
                 for tool_call in tool_calls:
                     func = tool_call.function
                     name, args = func.name, func.arguments
-                    logger.info(f"调用工具:{name}")
                     
                     args = json.loads(args)
                     target_client = None
                     for mcp_name, mcp_client in self.mcp_clients.items():
                         if mcp_client.have_tool(name):
                             target_client = mcp_client
-                            print(f"找到{name}对应的mcp_client:{target_client}")
                             break
                     
                     if target_client:
-                        print(f"调用{name}，参数为{args}")
                         try:
                             # 检查客户端连接状态，如果需要则重新连接
                             if not target_client._connected or target_client.session is None:
-                                logger.warning(f"检测到客户端未连接或会话为空，尝试重新连接")
+                                logger.info(f"重新连接客户端: {logger.color_text(name, 'CYAN')}")
                                 await target_client.connect_to_server()
                                 
                             # 调用工具
                             tool_res = await target_client.call_tool(name, args)  
-                            print(f"调用{name}的执行结果为{tool_res}")
-
+                            logger.success(f"工具 {logger.color_text(name, 'CYAN')} 调用成功")
 
                             await self.llmClient.add_tool_call(
                                 role="tool", 
@@ -188,19 +177,18 @@ class Agent():
                                 tool_call_id=tool_call.id
                             )
                         except Exception as e:
-                            print(f"工具{name}调用出错: {e}")
+                            error_msg = logger.color_text(str(e), "RED")
+                            logger.error(f"工具 {logger.color_text(name, 'CYAN')} 调用出错: {error_msg}")
+                            
                             # 如果是事件循环关闭错误，尝试重新连接所有客户端
                             if "Event loop is closed" in str(e):
-                                print("检测到事件循环关闭错误，尝试重新连接所有客户端")
+                                logger.warning("检测到事件循环关闭错误，尝试重新连接所有客户端")
                                 try:
                                     await self.reconnect_all_clients()
                                     # 重试工具调用
                                     try:
                                         tool_res = await target_client.call_tool(name, args)
-                                        print(f"重新连接后调用{name}的执行结果为{tool_res}")
-
-                                        # todo 重试机制
-                                    
+                                        logger.success(f"重新连接后工具 {logger.color_text(name, 'CYAN')} 调用成功")
 
                                         await self.llmClient.add_tool_call(
                                             role="tool", 
@@ -208,25 +196,21 @@ class Agent():
                                             tool_call_id=tool_call.id
                                         )
                                     except Exception as retry_e:
-                                        print(f"重试调用工具{name}失败: {retry_e}")
+                                        retry_error = logger.color_text(str(retry_e), "RED")
+                                        logger.error(f"重试调用工具 {logger.color_text(name, 'CYAN')} 失败: {retry_error}")
                                         await self.llmClient.add_tool_call(
                                             role="tool", 
                                             content=f"工具{name}调用出错: {str(retry_e)}", 
                                             tool_call_id=tool_call.id
                                         )
                                 except Exception as reconnect_e:
-                                    print(f"重新连接客户端失败: {reconnect_e}")
+                                    reconnect_error = logger.color_text(str(reconnect_e), "RED")
+                                    logger.error(f"重新连接客户端失败: {reconnect_error}")
                                     await self.llmClient.add_tool_call(
                                         role="tool", 
                                         content=f"工具{name}调用出错: 事件循环已关闭且无法重新连接 - {str(e)}", 
                                         tool_call_id=tool_call.id
                                     )
-                            else:
-                                await self.llmClient.add_tool_call(
-                                    role="tool", 
-                                    content=f"工具{name}调用出错: {str(e)}", 
-                                    tool_call_id=tool_call.id
-                                )
 
                 # llm决定是否继续调用工具
                 res = await self.llmClient.chat(message=None, tools=self.tools)

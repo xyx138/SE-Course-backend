@@ -10,11 +10,13 @@ from llama_index.postprocessor.dashscope_rerank import DashScopeRerank
 from dotenv import load_dotenv  
 import os
 load_dotenv()
-from utils.logger import MyLogger
+from utils.logger import MyLogger, logging, Colors
 import re
 # from utils.splitter import split_questions
 #
-logger = MyLogger("retriever")
+
+# 创建彩色日志记录器
+logger = MyLogger(name="Retriever", level=logging.INFO, colored=True)
 
 DB_PATH = os.getenv("PROJECT_PATH") + "/VectorStore"
 
@@ -29,8 +31,6 @@ class Retriever:
         self.knowledge_points = {}  # 存储知识点
 
     def retrieve(self, query: str, label: str = None):
-
-        print(f"检索的标签为：{label}")
         if label is None:
             return ""
 
@@ -38,38 +38,52 @@ class Retriever:
         retriever = index.as_retriever(
             similarity_top_k=5,
         )
-
-        print(f"index为：{index}")    
     
         retrieve_chunk = retriever.retrieve(query)
-        print(f"原始chunk为：{retrieve_chunk}")
         try:
             results = self.dashscope_rerank.postprocess_nodes(retrieve_chunk, query_str=query)
-            print(f"rerank成功，重排后的chunk为：{results}")
-        except:
+            count = logger.color_text(str(len(results)), "YELLOW")
+            logger.success(f"重排序成功，获取到{count}个结果")
+        except Exception as e:
+            error_msg = logger.color_text(str(e), "RED")
+            logger.warning(f"重排序失败: {error_msg}，使用原始结果")
             results = retrieve_chunk[:self.chunk_cnt]
-            print(f"rerank失败，chunk为：{results}")
+            
         chunk_text = ""
-        chunk_show = ""
+        valid_count = 0
         for i in range(len(results)):
             if results[i].score >= self.similarity_threshold:
                 chunk_text = chunk_text + f"## {i+1}:\n {results[i].text}\n"
-                chunk_show = chunk_show + f"## {i+1}:\n {results[i].text}\nscore: {round(results[i].score,2)}\n"
-
-        print(f"重排后的chunk为：{chunk_show}")
-        # 返回文本
+                valid_count += 1
+        
+        if valid_count > 0:
+            threshold = logger.color_text(str(self.similarity_threshold), "CYAN")
+            count = logger.color_text(str(valid_count), "YELLOW")
+            logger.info(f"使用相似度阈值 {threshold}，获取了 {count} 个有效结果")
+                
         return chunk_text
 
     def create_index(self, file_path: str, label: str):
         # 创建索引
+        path = logger.color_text(file_path, "CYAN")
+        label_str = logger.color_text(label, "YELLOW")
+        logger.info(f"正在为 {path} 创建索引: {label_str}")
+        
         index = self.vector_store.create_index(file_path, label)
+        logger.success(f"索引 {label_str} 创建成功")
         return index
 
     def delete_index(self, label: str):
         try:
+            label_str = logger.color_text(label, "YELLOW")
+            logger.info(f"正在删除索引: {label_str}")
+            
             res = self.vector_store.delete_index(label)
+            logger.success(f"索引 {label_str} 删除成功")
             return res
         except Exception as e:
+            error_msg = logger.color_text(str(e), "RED")
+            logger.error(f"删除向量索引失败: {error_msg}")
             return f"删除向量索引失败: {e}"
     
     def retrieve_by_knowledge_point(self, knowledge_point: str, label: str = None):
@@ -77,8 +91,9 @@ class Retriever:
         if label is None:
             return {"error": "未选择知识库"}
         
-        print(f"开始检索知识点: {knowledge_point}")
-        print(f"使用知识库: {label}")
+        kp = logger.color_text(knowledge_point, "CYAN")
+        label_str = logger.color_text(label, "YELLOW")
+        logger.info(f"检索知识点: {kp}, 知识库: {label_str}")
         
         index = self.vector_store.load_index(label)
         retriever = index.as_retriever(
@@ -86,52 +101,46 @@ class Retriever:
         )
         query = knowledge_point
         retrieve_chunk = retriever.retrieve(query)
-        print(f"向量检索返回结果数量: {len(retrieve_chunk)}")
         
         try:
             results = self.dashscope_rerank.postprocess_nodes(retrieve_chunk, query_str=query)
-            print(f"重排序后结果数量: {len(results)}")
+            count = logger.color_text(str(len(results)), "YELLOW")
+            logger.info(f"重排序后结果数量: {count}")
         except Exception as e:
-            print(f"重排序失败: {str(e)}")
+            error_msg = logger.color_text(str(e), "RED")
+            logger.warning(f"重排序失败: {error_msg}，使用原始结果")
             results = retrieve_chunk
 
         if not results:
+            logger.warning(f"未找到与 {kp} 相关的习题")
             return {"error": f"未找到与'{knowledge_point}'相关的习题"}
 
         matched_questions = []
         for i, result in enumerate(results):
             text = getattr(result.node, "text", None)
             if not text:
-                print(f"结果 {i} 没有text字段")
                 continue
                 
-            print(f"\n检查结果 {i}:")
-            print(f"文本内容: {text[:200]}...")  # 只打印前200个字符
-            
             kp_match = re.search(r"知识点:\s*(.*?)(?:\n|$)", text)
             if kp_match:
                 kp_list = [k.strip() for k in kp_match.group(1).split(",") if k.strip()]
-                print(f"提取的知识点列表: {kp_list}")
                 
                 if any(knowledge_point in k for k in kp_list):
-                    print(f"找到匹配的知识点!")
                     matched_questions.append({
                         "question": text,
                         "knowledge_points": kp_list,
                         "score": round(result.score, 2)
                     })
-                else:
-                    print(f"知识点不匹配")
-            else:
-                print("未找到知识点字段")
-
+            
         if not matched_questions:
+            logger.warning(f"未找到与 {kp} 相关的习题")
             return {"error": f"未找到与'{knowledge_point}'相关的习题"}
 
         # 按相似度分数排序
         matched_questions.sort(key=lambda x: x["score"], reverse=True)
         
-        print(f"\n最终匹配到 {len(matched_questions)} 道题目")
+        count = logger.color_text(str(len(matched_questions)), "YELLOW")
+        logger.success(f"匹配到 {count} 道题目")
         return {
             "questions": matched_questions,
             "total": len(matched_questions)
@@ -169,4 +178,9 @@ class Retriever:
 
 if __name__ == "__main__":
     retriever = Retriever()
-    logger.info(retriever.retrieve(query="什么是北京科技大学", label="public"))
+    result = retriever.retrieve(query="什么是北京科技大学", label="public")
+    if result:
+        logger.success("检索成功")
+        print(result)
+    else:
+        logger.warning("未找到相关内容")

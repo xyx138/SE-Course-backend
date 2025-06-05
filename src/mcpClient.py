@@ -6,9 +6,10 @@ from contextlib import AsyncExitStack
 from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp import ClientSession
 
-from utils.logger import MyLogger, logging
+from utils.logger import MyLogger, logging, Colors
 
-logger = MyLogger(level=logging.INFO)
+# 创建彩色日志记录器
+logger = MyLogger(name="MCPClient", level=logging.INFO, colored=True)
 
 # 检测是否为Windows环境
 IS_WINDOWS = platform.system() == "Windows"
@@ -28,11 +29,8 @@ class MCPClient:
         """连接到 MCP 服务器，使用官方 stdio_client"""
         async with self._lock:
             if self._connected:
-                logger.info("已经连接到服务器，跳过重复连接")
                 return
 
-            logger.info(f"开始连接服务器: {self.command} {' '.join(self.args)}")
-            
             # 设置环境变量
             env = os.environ.copy()
             if IS_WINDOWS:
@@ -51,26 +49,27 @@ class MCPClient:
                 stdio, write = await self.exit_stack.enter_async_context(
                     stdio_client(server_params)
                 )
-                logger.info("stdio_client 已连接子进程")
 
                 # 2. 创建 MCP 会话
                 self.session = await self.exit_stack.enter_async_context(
                     ClientSession(stdio, write)
                 )
                 await self.session.initialize()
-                logger.info("会话初始化成功")
 
                 # 获取可用工具
                 response = await self.session.list_tools()
                 self.tools = response.tools
                 self.tool_names = [tool.name for tool in self.tools]
-                logger.info(f"连接成功，可用工具: {self.tool_names}")
+                
+                command_str = logger.color_text(self.command, "CYAN")
+                logger.success(f"MCP连接成功: {command_str}")
 
                 self._connected = True
             except Exception as e:
-                logger.error(f"连接服务器失败: {e}")
+                error_msg = logger.color_text(str(e), "RED")
+                logger.error(f"连接MCP服务器失败: {error_msg}")
                 if IS_WINDOWS and isinstance(e, FileNotFoundError) and self.command in ["npx", "npx.cmd"]:
-                    logger.error("Windows环境下可能需要全局安装相关NPM包，请尝试运行: npm install -g @modelcontextprotocol/server-filesystem")
+                    logger.error(f"Windows环境下可能需要全局安装相关{logger.color_text('NPM包', 'YELLOW')}")
                 raise
 
     async def call_tool(self, tool_name: str, args: dict):
@@ -80,18 +79,17 @@ class MCPClient:
             available = ", ".join(self.tool_names)
             raise ValueError(f"工具 '{tool_name}' 不可用。可用工具: {available}")
         
-        # logger.info(f"调用工具 {tool_name}，参数: {args}")
-        
         try:
             return await self.session.call_tool(tool_name, args)
         except Exception as e:
-            logger.error(f"调用工具 {tool_name} 失败: {e}")
+            error_msg = logger.color_text(str(e), "RED")
+            logger.error(f"调用工具 {logger.color_text(tool_name, 'CYAN')} 失败: {error_msg}")
             # Windows环境下可能需要特殊处理路径参数
             if IS_WINDOWS and "path" in args:
                 # 尝试修复路径格式
                 if isinstance(args["path"], str):
                     args["path"] = args["path"].replace('/', '\\')
-                    logger.info(f"尝试使用Windows路径格式重新调用: {args['path']}")
+                    logger.info(f"使用Windows路径格式重试: {logger.color_text(args['path'], 'CYAN')}")
                     return await self.session.call_tool(tool_name, args)
             raise
 
@@ -104,7 +102,6 @@ class MCPClient:
     async def cleanup(self):
         """清理所有资源"""
         await self.exit_stack.aclose()
-        logger.info("资源清理完成")
 
 async def main():
     # 测试 MCPClient
@@ -115,14 +112,16 @@ async def main():
         await client.connect_to_server()
         # 列出工具
         for tool in client.getTool():
-            print(f"工具: {tool.name} - {tool.description}")
+            tool_info = f"{logger.color_text(tool.name, 'CYAN')} - {tool.description}"
+            logger.info(f"工具: {tool_info}")
         # 调用 read_file
         test_file = os.path.join(os.getcwd(), 'README.md')
         if client.have_tool('read_file'):
             res = await client.call_tool('read_file', {'path': test_file})
-            print(res.content)
+            logger.success(f"读取文件成功: {logger.color_text(test_file, 'CYAN')}")
     except Exception as e:
-        logger.error(f"测试过程中出错: {e}")
+        error_msg = logger.color_text(str(e), "RED")
+        logger.error(f"测试过程中出错: {error_msg}")
     finally:
         await client.cleanup()
 

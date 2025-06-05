@@ -52,12 +52,12 @@ class ExplainAgent(Agent):
             请将解释保存到{output_file}文件中。
             """
         
-        # 打印函数的参数
-        print("chat 参数")
-        print(f"query: {query}")
-        print(f"style: {style}")
-        print(f"output_file_name: {output_file_name}")
-        print(f"bing_search: {bing_search}")
+        # # 打印函数的参数
+        # print("chat 参数")
+        # print(f"query: {query}")
+        # print(f"style: {style}")
+        # print(f"output_file_name: {output_file_name}")
+        # print(f"bing_search: {bing_search}")
 
         try:
             res = await super().chat(prompt) 

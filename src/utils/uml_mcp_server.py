@@ -48,8 +48,8 @@ def setup_logging():
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     
-    # 创建格式化器
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    # 创建简化的格式化器
+    formatter = logging.Formatter('%(asctime)s [%(levelname)s] UML-MCP: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)
     
@@ -57,7 +57,6 @@ def setup_logging():
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
     
-    logging.info("日志系统初始化完成")
     return logger
 
 # 初始化日志记录器
@@ -72,7 +71,6 @@ UML_TYPES = [
     "class", "sequence", "activity", "usecase", 
     "state", "component", "deployment", "object"
 ]
-logger.debug(f"支持的UML图类型: {', '.join(UML_TYPES)}")
 
 # 类图示例
 CLASS_EXAMPLES = {
@@ -154,7 +152,6 @@ Order --> Cart: Order Created
 Cart --> Customer: Order Confirmation
 """
 }
-logger.debug("UML示例加载完成")
 
 def plantuml_encode(text):
     """
@@ -162,7 +159,6 @@ def plantuml_encode(text):
     
     参考: https://plantuml.com/text-encoding
     """
-    logger.debug("开始PlantUML编码")
     # 使用官方推荐的编码方式
     compressed = zlib.compress(text.encode('utf-8'))
     
@@ -242,16 +238,15 @@ def plantuml_encode(text):
         elif c == '=': pass  # 忽略填充字符
         else: result += c
     
-    logger.debug("PlantUML编码完成")
     return result
 
 def generate_uml_image(uml_code, diagram_type=None, output_dir=None):
     """
-    生成UML图的URL和代码，并保存到本地
-    
+    生成UML图片并返回代码、URL和本地路径
+
     Args:
         uml_code: PlantUML代码
-        diagram_type: UML图类型，用于生成文件名
+        diagram_type: 可选的UML图类型，用于文件命名
         output_dir: 输出目录路径，必须显式提供
     
     Returns:
@@ -262,15 +257,13 @@ def generate_uml_image(uml_code, diagram_type=None, output_dir=None):
             - local_path: 本地保存的文件路径
     """
 
-
-
     # 检查输出目录是否提供
     if not output_dir:
         error_msg = "必须提供输出目录（output_dir）"
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    logger.info(f"开始生成UML图: {diagram_type if diagram_type else 'unknown'}, 输出目录: {output_dir}")
+    logger.info(f"生成UML图: {diagram_type if diagram_type else 'unknown'}")
     
     try:
         # 编码UML代码
@@ -278,15 +271,9 @@ def generate_uml_image(uml_code, diagram_type=None, output_dir=None):
         
         # 构建URL，添加~1前缀
         url = f"http://localhost:8080/png/{encoded}"
-        logger.debug(f"生成的PlantUML URL: {url}")
         
         # 确保输出目录存在
         os.makedirs(output_dir, exist_ok=True)
-     
-        
-        logger.debug(f"使用输出目录: {output_dir}")
-        
-
 
         # 生成文件名
         if diagram_type:
@@ -301,24 +288,19 @@ def generate_uml_image(uml_code, diagram_type=None, output_dir=None):
         # 构建完整的文件路径
         file_path = os.path.join(output_dir, f"{filename}.png")
         static_file_path = os.path.join(static_dir, "uml.png")
-        logger.debug(f"图片将保存到: {file_path}")
-        logger.debug(f"静态图片将保存到: {static_file_path}")
         
         # 发送请求获取图片
-        logger.debug("发送HTTP请求获取图片")
         response = requests.get(url, timeout=30)
         
         # 检查响应状态码
         if response.status_code != 200:
             logger.error(f"PlantUML服务返回错误: {response.status_code}")
-            logger.error(f"响应内容: {response.text}")
             raise requests.RequestException(f"PlantUML服务错误: {response.status_code}")
         
         # 检查响应内容是否为图像
         content_type = response.headers.get('Content-Type', '')
         if 'image' not in content_type:
             logger.error(f"响应不是图像，Content-Type: {content_type}")
-            logger.error(f"响应内容: {response.text}")
             raise ValueError("未收到有效的图像")
         
         # 保存到文件
@@ -329,8 +311,8 @@ def generate_uml_image(uml_code, diagram_type=None, output_dir=None):
         with open(static_file_path, 'wb') as f:
             f.write(response.content)
         
-        logger.info(f"UML图生成成功，保存到: {file_path}")
-        logger.info(f"静态图片保存到: {static_file_path}")
+        logger.info(f"UML图生成成功: {diagram_type}")
+        
         # 返回结果
         return {
             "code": uml_code,
@@ -341,7 +323,6 @@ def generate_uml_image(uml_code, diagram_type=None, output_dir=None):
     
     except Exception as e:
         logger.error(f"生成UML图时出错: {str(e)}")
-        logger.error(f"UML代码: \n{uml_code}")
         
         # 即使出错也返回URL和代码
         return {
@@ -370,8 +351,6 @@ def generate_uml(diagram_type: str, code: str, output_dir: str) -> str:
         logger.error(error_msg)
         raise ValueError(error_msg)
     
-    logger.info(f"调用generate_uml工具: 类型={diagram_type}, 代码长度={len(code)}, 输出目录={output_dir}")
-    
     # 验证图表类型
     diagram_type = diagram_type.lower()
     if diagram_type not in UML_TYPES:
@@ -381,19 +360,14 @@ def generate_uml(diagram_type: str, code: str, output_dir: str) -> str:
     
     # 确保代码包含 @startuml 和 @enduml
     if "@startuml" not in code:
-        logger.debug("添加缺失的@startuml标记")
         code = f"@startuml\n{code}"
     if "@enduml" not in code:
-        logger.debug("添加缺失的@enduml标记")
         code = f"{code}\n@enduml"
-    
-    logger.debug(f"生成的UML代码:\n{code}")
     
     # 生成URL、代码和本地路径
     result = generate_uml_image(code, diagram_type, output_dir)
     
     # 返回JSON字符串
-    logger.debug(f"generate_uml工具执行完成，生成URL: {result.get('url')}")
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 @mcp.tool()
@@ -407,7 +381,6 @@ def generate_class_diagram(code: str, output_dir: str) -> str:
     Returns:
         包含PlantUML代码和URL的JSON字符串
     """
-    logger.info(f"调用generate_class_diagram工具: 代码长度={len(code)}...")
     return generate_uml("class", code, output_dir)
 
 @mcp.tool()
@@ -421,7 +394,6 @@ def generate_sequence_diagram(code: str, output_dir: str) -> str:
     Returns:
         包含PlantUML代码和URL的JSON字符串
     """
-    logger.info(f"调用generate_sequence_diagram工具: 代码长度={len(code)}...")
     return generate_uml("sequence", code, output_dir)
 
 @mcp.tool()
@@ -435,7 +407,6 @@ def generate_activity_diagram(code: str, output_dir: str) -> str:
     Returns:
         包含PlantUML代码和URL的JSON字符串
     """
-    logger.info(f"调用generate_activity_diagram工具: 代码长度={len(code)}...")
     return generate_uml("activity", code, output_dir)
 
 @mcp.tool()
@@ -449,7 +420,6 @@ def generate_usecase_diagram(code: str, output_dir: str) -> str:
     Returns:
         包含PlantUML代码和URL的JSON字符串
     """
-    logger.info(f"调用generate_usecase_diagram工具: 代码长度={len(code)}...")
     return generate_uml("usecase", code, output_dir)
 
 @mcp.tool()
@@ -463,7 +433,6 @@ def generate_state_diagram(code: str, output_dir: str) -> str:
     Returns:
         包含PlantUML代码和URL的JSON字符串
     """
-    logger.info(f"调用generate_state_diagram工具: 代码长度={len(code)}...")
     return generate_uml("state", code, output_dir)
 
 @mcp.tool()
@@ -477,7 +446,6 @@ def generate_component_diagram(code: str, output_dir: str) -> str:
     Returns:
         包含PlantUML代码和URL的JSON字符串
     """
-    logger.info(f"调用generate_component_diagram工具: 代码长度={len(code)}...")
     return generate_uml("component", code, output_dir)
 
 @mcp.tool()
@@ -491,7 +459,6 @@ def generate_deployment_diagram(code: str, output_dir: str) -> str:
     Returns:
         包含PlantUML代码和URL的JSON字符串
     """
-    logger.info(f"调用generate_deployment_diagram工具: 代码长度={len(code)}...")
     return generate_uml("deployment", code, output_dir)
 
 @mcp.tool()
@@ -505,36 +472,29 @@ def generate_object_diagram(code: str, output_dir: str) -> str:
     Returns:
         包含PlantUML代码和URL的JSON字符串
     """
-    logger.info(f"调用generate_object_diagram工具: 代码长度={len(code)}...")
     return generate_uml("object", code, output_dir)
 
 @mcp.tool()
 def generate_uml_from_code(code: str, output_dir: str) -> str:
-    """从PlantUML代码生成UML图并返回URL和本地路径。
+    """从PlantUML代码生成UML图并返回代码和URL。
+    自动检测图表类型。
 
     Args:
         code: 完整的PlantUML代码
         output_dir: 输出目录路径，必须显式提供
 
     Returns:
-        包含PlantUML代码、URL和本地路径的JSON字符串
+        包含PlantUML代码和URL的JSON字符串
     """
-    logger.info("调用generate_uml_from_code工具")
-    logger.debug(f"PlantUML代码长度: {len(code)} 字符")
-    
-    # 确保代码包含@startuml和@enduml
+    # 确保代码包含 @startuml 和 @enduml
     if "@startuml" not in code:
-        logger.debug("添加缺失的@startuml标记")
         code = f"@startuml\n{code}"
     if "@enduml" not in code:
-        logger.debug("添加缺失的@enduml标记")
         code = f"{code}\n@enduml"
     
     # 生成URL、代码和本地路径
-    result = generate_uml_image(code, output_dir=output_dir)
+    result = generate_uml_image(code, None, output_dir)
     
-    # 返回JSON字符串
-    logger.debug(f"generate_uml_from_code工具执行完成，生成URL: {result.get('url')}")
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 @mcp.resource("uml://types")
@@ -544,7 +504,6 @@ def get_uml_types() -> str:
     Returns:
         支持的UML图类型列表的JSON字符串
     """
-    logger.info("获取UML图类型列表")
     return json.dumps({
         "types": UML_TYPES,
         "descriptions": {
@@ -562,7 +521,6 @@ def get_uml_types() -> str:
 @mcp.prompt()
 def create_class_diagram() -> str:
     """创建类图的提示模板。"""
-    logger.info("使用类图提示模板")
     return """
 请帮我创建一个类图，直接提供完整的PlantUML代码。
 
@@ -588,7 +546,6 @@ User "1" -- "many" Order: places
 @mcp.prompt()
 def create_sequence_diagram() -> str:
     """创建序列图的提示模板。"""
-    logger.info("使用序列图提示模板")
     return """
 请帮我创建一个序列图，描述以下交互流程：
 

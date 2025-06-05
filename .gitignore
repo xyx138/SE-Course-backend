@@ -30,3 +30,9 @@ requirements.txt
 system_template.txt
 
 static/
+
+conversations/
+data/
+images/
+
+

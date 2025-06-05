@@ -1,5 +1,5 @@
 from agents.agent import Agent 
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter, Body
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter, Body, Depends, BackgroundTasks, Query
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 import threading
@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import asyncio
 import uvicorn
 import time
-from typing import List, Any, Callable, TypeVar, Awaitable
+from typing import List, Any, Callable, TypeVar, Awaitable, Optional, Dict, Union
 import shutil
 import concurrent.futures
 import functools
@@ -16,12 +16,16 @@ from agents.umlAgent import UML_Agent
 from fastapi.staticfiles import StaticFiles
 from enum import Enum
 from fastapi import Query
-from agents.questionAgent import questionAgent
+from agents.questionAgent import questionAgent, QuestionDifficulty, QuestionType
 from agents.explainAgent import ExplainAgent
-from typing import Optional
-import json
-from agents.questionAgent import QuestionDifficulty, QuestionType
 from agents.paperAgent import PaperAgent
+from agents.testAgent import TestAgent, Language, TestType
+from fastapi.middleware.cors import CORSMiddleware
+
+# 导入认证模块
+from auth import auth_router, get_current_active_user, User
+from utils.conversation_logger import ConversationLogger
+
 load_dotenv()
 api_key = os.getenv("DASHSCOPE_API_KEY")
 base_url = os.getenv("DASHSCOPE_BASE_URL")
@@ -46,8 +50,9 @@ umlAgent = UML_Agent(api_key, base_url, model)
 explainAgent = ExplainAgent(api_key, base_url, model)
 question_agent = questionAgent(api_key, base_url, model)
 paper_agent = PaperAgent()
+test_agent = TestAgent(api_key, base_url, model)
 
-agents = [agent, umlAgent, explainAgent, question_agent, paper_agent]
+agents = [agent, umlAgent, explainAgent, question_agent, paper_agent, test_agent]
 
 
 # 保存全局事件循环引用
@@ -212,9 +217,24 @@ def background_start_agent():
 
 app = FastAPI()
 
+# 添加CORS中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 在生产环境中，应该设置为具体的前端域名
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory=UML_STATIC_DIR), name="static")
 
+# 集成认证路由
+app.include_router(auth_router)
+
+# 初始化对话记录器
+PROJECT_PATH = os.getenv("PROJECT_PATH", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+conversation_logger = ConversationLogger(PROJECT_PATH)
 
 @app.get("/")
 async def root():
@@ -227,12 +247,16 @@ async def root():
     return {"message": "提供agent服务"}
 
 @app.post("/chat")
-async def chat(message: str = Form(...)):
+async def chat(
+    message: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
     """
     处理用户与Agent的对话请求
     
     Args:
         message (str): 用户发送的消息内容
+        current_user (User): 当前登录的用户
         
     Returns:
         dict: 包含状态和回复消息的字典
@@ -248,6 +272,16 @@ async def chat(message: str = Form(...)):
         # 在Agent线程的事件循环中执行异步函数
         response = await run_in_agent_thread(agent.chat, message, timeout=300)
         
+        # 记录对话
+        agent_type = agent.__class__.__name__
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type=agent_type,
+            query=message,
+            response=response
+        )
+        
         return {"status": "success", "message": response['message']}
     except concurrent.futures.TimeoutError:
         return {"status": "error", "message": "请求超时，请尝试简化问题或稍后重试"}
@@ -258,7 +292,8 @@ async def chat(message: str = Form(...)):
 @app.post("/create_or_update_index")
 async def create_or_update_index(
     files: List[UploadFile] = File(...),
-    name: str = Form(...)
+    name: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     创建或更新知识库索引
@@ -266,6 +301,7 @@ async def create_or_update_index(
     Args:
         files (List[UploadFile]): 上传的文件列表
         name (str): 知识库名称
+        current_user (User): 当前登录的用户
         
     Returns:
         dict: 包含操作状态和消息的字典
@@ -309,10 +345,13 @@ async def create_or_update_index(
         return {"status": "error", "message": f"创建向量存储时出错: {str(e)}"}
 
 @app.get("/list_knowledge_bases")
-async def list_knowledge_bases():
+async def list_knowledge_bases(current_user: User = Depends(get_current_active_user)):
     """
     获取所有知识库列表
     
+    Args:
+        current_user (User): 当前登录的用户
+        
     Returns:
         dict: 包含知识库列表的字典
         {
@@ -323,12 +362,16 @@ async def list_knowledge_bases():
     return {"status": "success", "knowledge_bases": [os.path.basename(dir) for dir in os.listdir(KNOWLEDGE_DIR)]}
 
 @app.post("/delete_knowledge_base")
-async def delete_knowledge_base(name: str = Form(...)):
+async def delete_knowledge_base(
+    name: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
     """
     删除指定的知识库
     
     Args:
         name (str): 要删除的知识库名称
+        current_user (User): 当前登录的用户
         
     Returns:
         dict: 包含操作状态和消息的字典
@@ -348,12 +391,16 @@ async def delete_knowledge_base(name: str = Form(...)):
 
 
 @app.post("/update_label")
-async def update_label(name: str = Form(...)):
+async def update_label(
+    name: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
     """
     更新所有Agent使用的知识库标签
     
     Args:
         name (str): 知识库标签名称
+        current_user (User): 当前登录的用户
         
     Returns:
         dict: 包含操作状态和消息的字典
@@ -388,7 +435,8 @@ async def update_label(name: str = Form(...)):
 @app.post("/umlAgent/generate_uml")
 async def generate_uml(
     query: str = Form(...),
-    diagram_type: DiagramType = Form(...)
+    diagram_type: DiagramType = Form(...),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     生成UML图
@@ -396,6 +444,7 @@ async def generate_uml(
     Args:
         query (str): 用户的UML图生成请求
         diagram_type (DiagramType): UML图类型，支持的类型包括：class, sequence, activity等
+        current_user (User): 当前登录的用户
         
     Returns:
         dict: 包含生成的UML图信息的字典
@@ -405,25 +454,37 @@ async def generate_uml(
             "static_path": str,
         }
     """
+
+    
     try:
-        # 现在diagram_type已经是枚举类型，可以直接使用其值
-        result = await run_in_agent_thread(umlAgent.generate_uml, query, diagram_type.value, timeout=120)
+        response = await run_in_agent_thread(
+            umlAgent.generate_uml, 
+            query=query, 
+            diagram_type=diagram_type.value,
+            timeout=300
+        )
         
-
-        print(f"画图结果：{result}")
-
-        return {"status": "success", "message": result['message'], "static_path": f"http://localhost:8000/static/{diagram_type.value}/uml.png"}
-
+        # 记录对话
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type="UmlAgent",
+            query=f"生成{diagram_type.value}图：{query}",
+            response=response
+        )
+        
+        return {"status": "success", "message": response['message'], "static_path": f"http://localhost:8000/static/{diagram_type.value}/uml.png"}
     except Exception as e:
-        # 处理其他异常
-        return {"status": "error", "message": f"生成UML图时出错: {str(e)}", "static_path": ""}
+        print(f"生成UML图时出错: {e}")
+        return {"status": "error", "message": f"生成UML图时出错: {str(e)}"}
 
 @app.post("/explainAgent/explain")
 async def explain(
     query: str = Form(...),
     style_label: ExplainStyle = Form(...),
     output_file_name: str = Form(None),
-    bing_search: bool = Form(False)
+    bing_search: bool = Form(False),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     处理概念解释请求
@@ -438,19 +499,27 @@ async def explain(
             bing_search,            # 第四个参数
             timeout=120             # timeout是run_in_agent_thread的参数
         )
-        
-        # 如果指定了输出文件名，保存解释内容到文件
         if output_file_name:
-            response["download_url"] = f"/download/{output_file_name}"
+            response['download_url'] = f"/download/{output_file_name}" 
+
+        # 记录对话
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type="ExplainAgent",
+            query=f"解释概念（{style_label.value}风格）：{query}",
+            response=response
+        )
         
         return response
     except Exception as e:
-        print(f"Error in explain endpoint: {str(e)}")
-        return {"status": "error", "message": f"生成解释时出错: {str(e)}"}
+        print(f"获取解释时出错: {e}")
+        return {"status": "error", "message": f"获取解释时出错: {str(e)}"}
 
 @app.post("/questionAgent/explain_question")
 async def explain_question(
     question: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     解释用户输入的题目
@@ -462,17 +531,32 @@ async def explain_question(
         }}
     """
     try:
-        result = await question_agent.explain_question(question)
-
-        return {"status": "success", "data": result['message']}
+        response = await run_in_agent_thread(
+            question_agent.explain_question, 
+            question=question,
+            timeout=300
+        )
+        
+        # 记录对话
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type="QuestionAgent",
+            query=f"解释题目：{question}",
+            response=response
+        )
+        
+        return response
     except Exception as e:
+        print(f"解释题目时出错: {e}")
         return {"status": "error", "message": f"解释题目时出错: {str(e)}"}
 
 @app.post("/questionAgent/generate_practice_set")
 async def generate_practice_set(
     topics: str = Form(...),
     num_questions: int = Form(5),
-    difficulty: QuestionDifficulty = QuestionDifficulty.MEDIUM
+    difficulty: QuestionDifficulty = Form(QuestionDifficulty.MEDIUM),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     生成练习题
@@ -506,15 +590,25 @@ async def generate_practice_set(
         
         # 调用question_agent时传入处理后的列表
         result = await question_agent.generate_practice_set(topic_list, num_questions, difficulty)
-        return {"status": "success", "data": result['message']}
+        # 记录对话
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type="QuestionAgent",
+            query=f"生成练习集：主题={topics}，数量={num_questions}，难度={difficulty.value}",
+            response=result
+        )
+        return result
     except Exception as e:
-        return {"status": "error", "message": f"生成练习题时出错: {str(e)}"}
+        print(f"生成练习集时出错: {e}")
+        return {"status": "error", "message": f"生成练习集时出错: {str(e)}"}
 
 @app.post("/questionAgent/grade_practice_set")
 async def grade_practice_set(
     practice_set: str = Form(...),  # 题目集的JSON字符串
     student_answers: str = Form(...),  # 学生答案集的JSON字符串
-    reference_answers: str = Form(...)  # 参考答案集的JSON字符串
+    reference_answers: str = Form(...),  # 参考答案集的JSON字符串
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     批改练习题集
@@ -581,18 +675,52 @@ async def grade_practice_set(
         }
 
 @app.post("/paperAgent/search_papers")
-async  def search_papers(topic: str = Form(...), max_results: int = Form(...)):
+async def search_papers(
+    topic: str = Form(...), 
+    max_results: int = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
     """
     搜索论文
+    
+    Args:
+        topic (str): 搜索主题
+        max_results (int): 最大结果数
+        current_user (User): 当前登录的用户
+        
+    Returns:
+        dict: 包含搜索结果的字典
     """
+    if not paper_agent or not agent_ready.is_set():
+        return {"status": "error", "message": "Paper Agent 尚未准备好，请稍后再试"}
+    
     try:
-        result = await run_in_agent_thread(paper_agent.search_papers_by_topic, topic, max_results, timeout=120)
-        return {"status": "success", "message": result['message']}
+        response = await run_in_agent_thread(
+            paper_agent.search_papers_by_topic,
+            topic=topic,
+            max_results=max_results,
+            timeout=300
+        )
+        
+        # 记录对话
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type="PaperAgent",
+            query=f"搜索论文：{topic}，最大结果数={max_results}",
+            response=response
+        )
+        
+        return response
     except Exception as e:
+        print(f"搜索论文时出错: {e}")
         return {"status": "error", "message": f"搜索论文时出错: {str(e)}"}
 
 @app.post("/paperAgent/download_and_read_paper")
-async def download_and_read_paper(paper_id: str = Form(...)):
+async def download_and_read_paper(
+    paper_id: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
     """
     获取论文详情
     """
@@ -603,7 +731,9 @@ async def download_and_read_paper(paper_id: str = Form(...)):
         return {"status": "error", "message": f"下载和阅读论文时出错: {str(e)}"}
 
 @app.post("/paperAgent/list_and_organize_papers")
-async def list_and_organize_papers():
+async def list_and_organize_papers(
+    current_user: User = Depends(get_current_active_user)
+):
     """
     列出并组织论文
     """
@@ -615,7 +745,11 @@ async def list_and_organize_papers():
     
 
 @app.post("/paperAgent/analyze_paper_for_project")
-async def analyze_paper_for_project(paper_id: str = Form(...), project_description: str = Form(...)):
+async def analyze_paper_for_project(
+    paper_id: str = Form(...), 
+    project_description: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
     """
     分析论文对特定项目的应用价值
     """
@@ -627,7 +761,10 @@ async def analyze_paper_for_project(paper_id: str = Form(...), project_descripti
      
 
 @app.post("/paperAgent/recommend_learning_path")
-async def recommend_learning_path(topic: str = Form(...)):
+async def recommend_learning_path(
+    topic: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
     """
     推荐学习路径
     """
@@ -641,7 +778,10 @@ async def recommend_learning_path(topic: str = Form(...)):
 
 # 添加新的下载端点
 @app.get("/download/{filename}")
-async def download_file(filename: str):
+async def download_file(
+    filename: str,
+    current_user: User = Depends(get_current_active_user)
+):
     """
     下载生成的解释文件
     
@@ -661,8 +801,353 @@ async def download_file(filename: str):
         filename=filename
     )
 
+@app.get("/conversations")
+async def get_user_conversations(
+    limit: Optional[int] = Query(20, description="返回的最大记录数"),
+    agent_type: Optional[str] = Query(None, description="可选的Agent类型过滤条件"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    获取用户的对话历史记录
+    
+    Args:
+        limit: 返回的最大记录数，默认20条
+        agent_type: 可选的Agent类型过滤条件
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 包含用户对话记录的字典
+    """
+    try:
+        conversations = conversation_logger.get_user_conversations(
+            user_id=current_user.id,
+            limit=limit,
+            agent_type=agent_type
+        )
+        
+        return {
+            "status": "success",
+            "conversations": conversations,
+            "total": len(conversations)
+        }
+    except Exception as e:
+        print(f"获取用户对话记录时出错: {e}")
+        return {"status": "error", "message": f"获取用户对话记录时出错: {str(e)}"}
 
+@app.delete("/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    删除特定的对话记录
+    
+    Args:
+        conversation_id: 要删除的对话ID
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 操作结果
+    """
+    try:
+        # 验证conversation_id是否属于当前用户
+        user_id_str = conversation_id.split('_')[0]
+        try:
+            conversation_user_id = int(user_id_str)
+            if conversation_user_id != current_user.id:
+                return {"status": "error", "message": "无权删除此对话记录"}
+        except ValueError:
+            return {"status": "error", "message": "无效的对话ID"}
+            
+        # 获取用户的所有对话记录
+        conversations = conversation_logger._load_user_conversations(current_user.id)
+        
+        # 找到并删除指定ID的对话
+        before_count = len(conversations["conversations"])
+        conversations["conversations"] = [
+            conv for conv in conversations["conversations"] 
+            if conv["id"] != conversation_id
+        ]
+        after_count = len(conversations["conversations"])
+        
+        if before_count == after_count:
+            return {"status": "error", "message": "未找到指定的对话记录"}
+            
+        # 保存更新后的对话记录
+        conversation_logger._save_user_conversations(current_user.id, conversations)
+        
+        return {
+            "status": "success", 
+            "message": "已成功删除对话记录"
+        }
+    except Exception as e:
+        print(f"删除对话记录时出错: {e}")
+        return {"status": "error", "message": f"删除对话记录时出错: {str(e)}"}
 
+@app.delete("/conversations")
+async def delete_all_conversations(
+    agent_type: Optional[str] = Query(None, description="可选的Agent类型过滤条件"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    删除用户的所有对话记录
+    
+    Args:
+        agent_type: 可选的Agent类型过滤条件，如果提供则只删除该类型的对话
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 操作结果
+    """
+    try:
+        # 获取用户的所有对话记录
+        conversations = conversation_logger._load_user_conversations(current_user.id)
+        
+        if agent_type:
+            # 只删除特定类型的对话
+            before_count = len(conversations["conversations"])
+            conversations["conversations"] = [
+                conv for conv in conversations["conversations"] 
+                if conv["agent_type"] != agent_type
+            ]
+            after_count = len(conversations["conversations"])
+            deleted_count = before_count - after_count
+            
+            # 保存更新后的对话记录
+            conversation_logger._save_user_conversations(current_user.id, conversations)
+            
+            return {
+                "status": "success", 
+                "message": f"已成功删除 {deleted_count} 条 {agent_type} 类型的对话记录"
+            }
+        else:
+            # 删除所有对话
+            deleted_count = len(conversations["conversations"])
+            conversations["conversations"] = []
+            
+            # 保存更新后的对话记录
+            conversation_logger._save_user_conversations(current_user.id, conversations)
+            
+            return {
+                "status": "success", 
+                "message": f"已成功删除所有 {deleted_count} 条对话记录"
+            }
+    except Exception as e:
+        print(f"删除对话记录时出错: {e}")
+        return {"status": "error", "message": f"删除对话记录时出错: {str(e)}"}
+
+@app.post("/testAgent/generate_test_cases")
+async def generate_test_cases(
+    code: str = Form(...),
+    language: Language = Form(...),
+    test_type: TestType = Form(...),
+    description: str = Form(""),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    为给定代码生成测试用例
+    
+    Args:
+        code: 要测试的源代码
+        language: 编程语言
+        test_type: 测试类型
+        description: 代码功能描述(可选)
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 包含测试用例代码和解释的字典
+    """
+    if not test_agent or not agent_ready.is_set():
+        return {"status": "error", "message": "Test Agent 尚未准备好，请稍后再试"}
+    
+    try:
+        response = await run_in_agent_thread(
+            test_agent.generate_test_cases,
+            code=code,
+            language=language,
+            test_type=test_type,
+            description=description,
+            timeout=300
+        )
+        
+        # 记录对话
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type="TestAgent",
+            query=f"生成{language.value}代码的{test_type.value}测试用例",
+            response=response
+        )
+        
+        return response
+    except Exception as e:
+        print(f"生成测试用例时出错: {e}")
+        return {"status": "error", "message": f"生成测试用例时出错: {str(e)}"}
+
+@app.post("/testAgent/analyze_code_for_testability")
+async def analyze_code_for_testability(
+    code: str = Form(...),
+    language: Language = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    分析代码的可测试性并提供改进建议
+    
+    Args:
+        code: 要分析的代码
+        language: 编程语言
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 包含可测试性分析结果的字典
+    """
+    if not test_agent or not agent_ready.is_set():
+        return {"status": "error", "message": "Test Agent 尚未准备好，请稍后再试"}
+    
+    try:
+        response = await run_in_agent_thread(
+            test_agent.analyze_code_for_testability,
+            code=code,
+            language=language,
+            timeout=300
+        )
+        
+        # 记录对话
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type="TestAgent",
+            query=f"分析{language.value}代码的可测试性",
+            response=response
+        )
+        
+        return response
+    except Exception as e:
+        print(f"分析代码可测试性时出错: {e}")
+        return {"status": "error", "message": f"分析代码可测试性时出错: {str(e)}"}
+
+@app.post("/testAgent/explain_testing_concept")
+async def explain_testing_concept(
+    concept: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    解释软件测试相关概念
+    
+    Args:
+        concept: 要解释的测试概念
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 包含概念解释的字典
+    """
+    if not test_agent or not agent_ready.is_set():
+        return {"status": "error", "message": "Test Agent 尚未准备好，请稍后再试"}
+    
+    try:
+        response = await run_in_agent_thread(
+            test_agent.explain_testing_concept,
+            concept=concept,
+            timeout=300
+        )
+        
+        # 记录对话
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type="TestAgent",
+            query=f"解释测试概念：{concept}",
+            response=response
+        )
+        
+        return response
+    except Exception as e:
+        print(f"解释测试概念时出错: {e}")
+        return {"status": "error", "message": f"解释测试概念时出错: {str(e)}"}
+
+@app.post("/testAgent/generate_test_plan")
+async def generate_test_plan(
+    project_description: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    根据项目描述生成测试计划
+    
+    Args:
+        project_description: 项目描述
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 包含测试计划的字典
+    """
+    if not test_agent or not agent_ready.is_set():
+        return {"status": "error", "message": "Test Agent 尚未准备好，请稍后再试"}
+    
+    try:
+        response = await run_in_agent_thread(
+            test_agent.generate_test_plan,
+            project_description=project_description,
+            timeout=300
+        )
+        
+        # 记录对话
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type="TestAgent",
+            query=f"生成测试计划：{project_description[:50]}...",
+            response=response
+        )
+        
+        return response
+    except Exception as e:
+        print(f"生成测试计划时出错: {e}")
+        return {"status": "error", "message": f"生成测试计划时出错: {str(e)}"}
+
+@app.post("/testAgent/evaluate_test_coverage")
+async def evaluate_test_coverage(
+    code: str = Form(...),
+    tests: str = Form(...),
+    language: Language = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    评估测试用例对代码的覆盖程度
+    
+    Args:
+        code: 源代码
+        tests: 测试代码
+        language: 编程语言
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 包含测试覆盖率评估的字典
+    """
+    if not test_agent or not agent_ready.is_set():
+        return {"status": "error", "message": "Test Agent 尚未准备好，请稍后再试"}
+    
+    try:
+        response = await run_in_agent_thread(
+            test_agent.evaluate_test_coverage,
+            code=code,
+            tests=tests,
+            language=language,
+            timeout=300
+        )
+        
+        # 记录对话
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type="TestAgent",
+            query=f"评估{language.value}测试代码的覆盖率",
+            response=response
+        )
+        
+        return response
+    except Exception as e:
+        print(f"评估测试覆盖率时出错: {e}")
+        return {"status": "error", "message": f"评估测试覆盖率时出错: {str(e)}"}
 
 if __name__ == "__main__":
     # 启动后台线程
@@ -679,4 +1164,4 @@ if __name__ == "__main__":
         print("警告: Agent初始化超时，API服务可能无法正常工作")
     
     # 禁用uvicorn的热重载功能
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)
