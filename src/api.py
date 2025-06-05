@@ -1,6 +1,6 @@
 from agents.agent import Agent 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter, Body
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from dotenv import load_dotenv
 import threading
 import os
@@ -22,6 +22,7 @@ from typing import Optional
 import json
 from agents.questionAgent import QuestionDifficulty, QuestionType
 from agents.paperAgent import PaperAgent
+from database import init_db, add_student, add_administrator, verify_student, verify_administrator
 load_dotenv()
 api_key = os.getenv("DASHSCOPE_API_KEY")
 base_url = os.getenv("DASHSCOPE_BASE_URL")
@@ -63,6 +64,24 @@ os.makedirs(DOCS_DIR, exist_ok=True)
 
 class ChatRequest(BaseModel):
     message: str
+
+class StudentLoginRequest(BaseModel):
+    studentId: str
+    password: str
+
+class StudentRegisterRequest(BaseModel):
+    studentId: str
+    password: str
+    name: str
+
+class AdminLoginRequest(BaseModel):
+    managerId: str
+    password: str
+
+class AdminRegisterRequest(BaseModel):
+    managerId: str
+    password: str
+    name: str
 
 
 # uml图类型
@@ -176,6 +195,8 @@ class StepByStepRequest(BaseModel):
 async def start_agent():
     global agent
     try:
+        # 初始化数据库
+        init_db()
         for agt in agents:
             await agt.setup()
         agent_ready.set()
@@ -215,16 +236,141 @@ app = FastAPI()
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory=UML_STATIC_DIR), name="static")
 
+# 挂载templates目录
+TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
+if os.path.exists(TEMPLATES_DIR):
+    app.mount("/templates", StaticFiles(directory=TEMPLATES_DIR), name="templates")
+
 
 @app.get("/")
 async def root():
     """
-    API根路径，返回服务状态信息
-    
-    Returns:
-        dict: 包含服务状态信息的字典
+    API根路径，返回统一认证页面
     """
+    # try:
+    #     # with open(os.path.join(TEMPLATES_DIR, "unified_auth.html"), "r", encoding="utf-8") as f:
+    #         html_content = f.read()
+    #     return HTMLResponse(content=html_content)
+    # except FileNotFoundError:
     return {"message": "提供agent服务"}
+
+@app.get("/auth")
+async def auth_page():
+    """
+    返回统一认证页面
+    """
+    try:
+        with open(os.path.join(TEMPLATES_DIR, "unified_auth.html"), "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        return {"message": "认证页面未找到"}
+
+# ================== 认证相关接口 ==================
+
+@app.post("/api/student/login")
+async def student_login(request: StudentLoginRequest):
+    """
+    学生登录接口
+    
+    Args:
+        request: 包含studentId和password的请求体
+        
+    Returns:
+        dict: 登录结果
+    """
+    if not request.studentId or not request.password:
+        raise HTTPException(status_code=400, detail="请提供学号和密码")
+    
+    student = verify_student(request.studentId, request.password)
+    if student:
+        return {"message": "登录成功", "user": student}
+    
+    raise HTTPException(status_code=401, detail="学号或密码错误")
+
+@app.post("/api/student/register")
+async def student_register(request: StudentRegisterRequest):
+    """
+    学生注册接口
+    
+    Args:
+        request: 包含studentId、password和name的请求体
+        
+    Returns:
+        dict: 注册结果
+    """
+    if not all([request.studentId, request.password, request.name]):
+        raise HTTPException(status_code=400, detail="请提供所有必要信息")
+    
+    if add_student(request.studentId, request.password, request.name):
+        return {"message": "注册成功"}
+    
+    raise HTTPException(status_code=400, detail="该学号已被注册")
+
+@app.post("/api/admin/login")
+async def admin_login(request: AdminLoginRequest):
+    """
+    管理员登录接口
+    
+    Args:
+        request: 包含managerId和password的请求体
+        
+    Returns:
+        dict: 登录结果
+    """
+    if not request.managerId or not request.password:
+        raise HTTPException(status_code=400, detail="请提供管理员ID和密码")
+    
+    admin = verify_administrator(request.managerId, request.password)
+    if admin:
+        return {"message": "登录成功", "user": admin}
+    
+    raise HTTPException(status_code=401, detail="管理员ID或密码错误")
+
+@app.post("/api/admin/register")
+async def admin_register(request: AdminRegisterRequest):
+    """
+    管理员注册接口
+    
+    Args:
+        request: 包含managerId、password和name的请求体
+        
+    Returns:
+        dict: 注册结果
+    """
+    if not all([request.managerId, request.password, request.name]):
+        raise HTTPException(status_code=400, detail="请提供所有必要信息")
+    
+    if add_administrator(request.managerId, request.password, request.name):
+        return {"message": "注册成功"}
+    
+    raise HTTPException(status_code=400, detail="该管理员ID已被注册")
+
+@app.get("/student/dashboard")
+async def student_dashboard():
+    """
+    学生仪表板页面
+    """
+    try:
+        with open(os.path.join(TEMPLATES_DIR, "student_dashboard.html"), "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="学生仪表板页面未找到")
+
+@app.get("/admin/dashboard")
+async def admin_dashboard():
+    """
+    管理员仪表板页面
+    """
+    try:
+        with open(os.path.join(TEMPLATES_DIR, "admin_dashboard.html"), "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="管理员仪表板页面未找到")
+
+# ================== Agent服务接口 ==================
 
 @app.post("/chat")
 async def chat(message: str = Form(...)):

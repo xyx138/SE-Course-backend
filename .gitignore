@@ -30,3 +30,14 @@ requirements.txt
 system_template.txt
 
 static/
+
+templates/
+
+studentlogin.py
+
+adminlogin.py
+
+logintest.py
+
+
+my_pymysql.py
