@@ -1,6 +1,6 @@
 from agents.agent import Agent 
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter, Body, Depends, BackgroundTasks, Query
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter, Body, Depends, BackgroundTasks, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse
 from dotenv import load_dotenv
 import threading
 import os
@@ -251,19 +251,24 @@ app.add_middleware(
 # 挂载静态文件目录
 app.mount("/static", StaticFiles(directory=UML_STATIC_DIR), name="static")
 
+DIST_DIR = os.path.join(os.getenv("PROJECT_PATH"), "dist")
+
+# 挂载dist目录
+app.mount("/dist", StaticFiles(directory=DIST_DIR), name="dist")
+
 # 集成认证路由
 app.include_router(auth_router)
 
 
-@app.get("/")
-async def root():
-    """
-    API根路径，返回服务状态信息
+# @app.get("/")
+# async def root():
+#     """
+#     API根路径，返回服务状态信息
     
-    Returns:
-        dict: 包含服务状态信息的字典
-    """
-    return {"message": "提供agent服务"}
+#     Returns:
+#         dict: 包含服务状态信息的字典
+#     """
+#     return {"message": "提供agent服务"}
 
 @app.post("/chat")
 async def chat(
@@ -1732,6 +1737,54 @@ async def delete_plan(
     except Exception as e:
         print(f"删除复习计划时出错: {e}")
         return {"status": "error", "message": f"删除复习计划时出错: {str(e)}"}
+
+
+# 后端 API 添加 /api 前缀
+app_with_prefix = FastAPI()
+app_with_prefix.mount("/api", app)
+
+# 挂载静态资源
+app_with_prefix.mount("/assets", StaticFiles(directory=os.path.join(DIST_DIR, "assets")), name="assets")
+
+# 处理根路径，返回 index.html
+@app_with_prefix.get("/", response_class=HTMLResponse)
+async def read_root():
+    try:
+        index_path = os.path.join(DIST_DIR, "index.html")
+        print(f"尝试读取首页: {index_path}")
+        with open(index_path, mode="r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        print(f"读取首页出错: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+# 处理所有其他路径，支持前端路由
+@app_with_prefix.get("/{full_path:path}", response_class=HTMLResponse)
+async def serve_spa(request: Request, full_path: str):
+    print(f"处理请求路径: {full_path}")
+    
+    # 检查是否是直接静态文件请求（如 favicon.ico）
+    if "." in full_path.split("/")[-1]:
+        file_path = os.path.join(DIST_DIR, full_path)
+        print(f"检查静态文件: {file_path}")
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            print(f"提供静态文件: {file_path}")
+            return FileResponse(file_path)
+        else:
+            print(f"静态文件不存在: {file_path}")
+    
+    # 所有其他请求返回 index.html（支持前端路由）
+    try:
+        index_path = os.path.join(DIST_DIR, "index.html")
+        print(f"返回SPA首页: {index_path}")
+        with open(index_path, mode="r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        print(f"读取SPA首页出错: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+# 使用新的应用实例
+app = app_with_prefix
 
 if __name__ == "__main__":
     # 启动后台线程
