@@ -15,7 +15,7 @@ class ExplainAgent(Agent):
         super().__init__(api_key, base_url, model, label, [
             'filesystem',
             'bingcn',
-            'memory',
+            # 'memory',
         ])
         self.output_dir = os.path.join(os.getenv('PROJECT_PATH'), 'static', 'docs')
 
@@ -30,7 +30,7 @@ class ExplainAgent(Agent):
         return base_prompt + '\n' + explain_prompt
 
 
-    async def chat(self, query: str, style: str, output_file_name: str = None, bing_search: bool = False) -> str:
+    async def chat(self, query: str, style: str,  bing_search: bool = False) -> str:
         # 将style转换为解释风格
         s2p = {
             'CONCISE': '用简洁明了的方式，给出要点式的解释。',
@@ -43,15 +43,28 @@ class ExplainAgent(Agent):
 
         prompt = f"""
         用户的问题是：{query},
-        请用{s2p[style]}的风格解释这个概念。
+        请用{s2p[style]}的风格解释这个概念。\n
+        请使用bing_cn工具搜索，获取和用户的问题`{query}`相关的链接。 \n
         """
 
-        if output_file_name:
-            output_file = os.path.join(self.output_dir, output_file_name)
-            prompt += f"""
-            请将解释保存到{output_file}文件中。
-            """
         
+        prompt += f"""
+        你只需要返回一个json字符串，包含以下内容：
+        {{
+            "message": "解释内容",
+            "search_results": [
+                {{
+                    "title": "标题",
+                    "link": "链接"
+                }},
+                {{
+                    "title": "标题",
+                    "link": "链接"
+                }}
+            ]
+        }}
+        """
+
         # # 打印函数的参数
         # print("chat 参数")
         # print(f"query: {query}")
@@ -61,46 +74,15 @@ class ExplainAgent(Agent):
 
         try:
             res = await super().chat(prompt) 
-            explain_str = res['message']
 
-            if bing_search:
-                prompt = f"""
-                提取bing_search的返回结果，返回和用户的问题`{query}`相关的链接。
-                你只需要回复一个列表，包含多个链接。例如：
+            if res['status'] == 'success':
+                return res
 
-                [
-                {{
-                    "title": ""
-                    "link": ""
-                }},
-                {{
-                    "title": ""
-                    "link": ""
-                }}
-                ]
-
-
-
-                """
-
-                try:
-                    res = await super().chat(prompt)
-                    return {
-                        "status": "success",
-                        "message": explain_str,
-                        "search_results": res['message']
-                    }
-            
-                except Exception as e:
-                    return {
-                        "status": "error",
-                        "message": "获取相关链接出错"
-                    }
-
-            return {
-                "status": "success",
-                "message": explain_str
-            }
+            else:
+                return {
+                    "status": "error",
+                    "message": res['message']
+                }
 
         except Exception as e:
             return {

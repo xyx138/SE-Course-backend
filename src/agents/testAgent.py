@@ -39,7 +39,7 @@ class TestAgent(Agent):
         super().__init__(api_key, base_url, model, label, [
             "bingcn",
             "time",
-            "memory"
+            # "memory"
         ])
         
     def get_system_prompt(self) -> str:
@@ -86,6 +86,13 @@ class TestAgent(Agent):
             2. 涵盖主要功能路径和边缘情况
             3. 遵循测试最佳实践
             4. 包含测试用例的解释
+
+
+            你只需要返回一个json格式的字符串，如下：
+            {{
+                "code": "测试用例代码",
+                "explanation": "测试用例解释"
+            }}
             """
             
             response = await self.chat(prompt)
@@ -123,6 +130,16 @@ class TestAgent(Agent):
             3. 具体改进建议，使代码更易于测试
             4. 应重点测试的部分
             5. 示例说明如何修改代码提高可测试性
+
+            你只需要返回一个json格式的字符串，如下：
+            {{
+                "score": "代码可测试性评分",
+                "explanation": "代码可测试性解释",
+                "suggestions": "具体改进建议",
+                "test_points": "应重点测试的部分",
+                "example": "示例说明如何修改代码提高可测试性"
+            }}
+
             """
             
             response = await self.chat(prompt)
@@ -240,6 +257,23 @@ class TestAgent(Agent):
             3. 未覆盖的代码部分和边缘情况
             4. 改进测试覆盖率的建议
             5. 针对未覆盖部分的补充测试用例示例
+
+
+            你只需要返回一个json格式的字符串，如下：
+            {{
+            "coverage_report": {{
+                "coverage_metrics": {{
+                "statement_coverage": "",
+                "branch_coverage": "",
+                "condition_coverage": "",
+                "decision_coverage": "",
+                "path_coverage": "",
+                "function_coverage": ""
+                }},
+                "text": "在这里详细描述覆盖情况的评估报告，语言为中文，涵盖上述五点内容。"
+            }},
+            "suggestions": "列出可行的改进建议，如哪些模块需要补测、应添加何种测试方法等。"
+            }}
             """
             
             response = await self.chat(prompt)

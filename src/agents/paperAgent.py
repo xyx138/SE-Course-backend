@@ -39,6 +39,10 @@ class PaperAgent(Agent):
         - download_paper：下载指定的论文
         - list_papers：列出已下载的论文
         - read_paper：阅读并分析论文内容
+        
+        注意：
+        1. 所有工具用到论文id参数为paper_id，而不是id
+        2. 如果{topic}为中文，请将它翻译为英文后再调用工具
 
         在与学生互动时，应注重以下几点：
         1. 使用清晰、易懂的语言解释复杂的学术概念
@@ -61,12 +65,26 @@ class PaperAgent(Agent):
         prompt = f"""
         请使用search_papers工具搜索与"{topic}"相关的软件工程论文。
         搜索参数:
-        - query: "{topic}"
+        - query: {topic}的英文形式
         - max_results: {max_results}
         
         如果{topic}为中文，请将它翻译为英文后再调用工具。
-        搜索完成后，请以表格形式整理论文信息，包括标题、作者、发表年份和简短摘要。
-        然后，请推荐其中最相关的2-3篇论文，并简要说明为什么推荐这些论文。
+
+        你只需要返回json格式的字符串
+        json格式如下：
+        {{
+            "papers": [
+                {{
+                    "title": "论文标题",
+                    "abstract": "论文的简要总结，不要超过100字",
+                    "authors": "论文作者",
+                    "year": "论文发表年份",
+                    "citations": "论文引用量",
+                    "url": "论文下载链接",
+                    "doi": "论文的DOI(url的最后一部分)"
+                }}
+            ]
+        }}
         """
         return await self.chat(prompt)
 

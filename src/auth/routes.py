@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from typing import List
 
-from .models import User, get_db, create_access_token
+from .models import User, get_db, create_access_token, get_password_hash, verify_password
 from .auth import (
     UserCreate, 
     UserResponse, 
@@ -72,6 +72,84 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = 
 async def read_users_me(current_user: User = Depends(get_current_active_user)):
     """获取当前用户信息"""
     return current_user
+
+# 修改密码
+@router.post("/change-password")
+async def change_password(
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    修改密码
+    
+    Args:
+        current_password: 当前密码
+        new_password: 新密码
+        current_user: 当前登录用户（从依赖注入获取）
+        db: 数据库会话
+        
+    Returns:
+        dict: 修改结果
+        {
+            "status": "success"/"error",
+            "message": str
+        }
+    """
+    try:
+        # 验证当前密码是否正确
+        if not verify_password(current_password, current_user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="当前密码不正确"
+            )
+        
+        # 验证新密码是否符合要求
+        if len(new_password) < 6:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="新密码长度必须至少为6个字符"
+            )
+        
+        # 如果新密码与当前密码相同，则不需要更改
+        if current_password == new_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="新密码不能与当前密码相同"
+            )
+        
+        # 更新密码（先哈希处理）
+        hashed_new_password = get_password_hash(new_password)
+        
+        # 获取数据库中的用户对象
+        user = db.query(User).filter(User.id == current_user.id).first()
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="用户不存在"
+            )
+        
+        # 更新密码
+        user.hashed_password = hashed_new_password
+        db.commit()
+        
+        return {
+            "status": "success", 
+            "message": "密码修改成功"
+        }
+        
+    except HTTPException as e:
+        # 重新抛出HTTP异常
+        raise e
+    except Exception as e:
+        # 记录错误
+        print(f"修改密码时出错: {str(e)}")
+        # 返回通用错误信息
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"修改密码时出错: {str(e)}"
+        )
 
 @router.get("/users", response_model=List[UserResponse])
 async def get_users(db: Session = Depends(get_db), current_user: User = Depends(get_admin_user)):

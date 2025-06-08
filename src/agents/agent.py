@@ -27,7 +27,7 @@ all_servers = [
     "UML-MCP-Server",
     "bingcn",
     "fetch",
-    "memory",
+    # "memory",
     "time"
 ]
 
@@ -137,8 +137,10 @@ class Agent():
                 logger.warning("未获取到检索结果")
 
             prompt = f"根据以下检索结果，回答用户的问题：\n{chunk_text}\n用户的问题是：{query}"
-            
-            res = await self.llmClient.chat(message=prompt, tools=self.tools)
+            if len(self.tools) > 0:
+                res = await self.llmClient.chat(message=prompt, tools=self.tools)
+            else:
+                res = await self.llmClient.chat(message=prompt)
             
             tool_calls = res.choices[0].message.tool_calls
 
@@ -212,8 +214,10 @@ class Agent():
                                         tool_call_id=tool_call.id
                                     )
 
-                # llm决定是否继续调用工具
-                res = await self.llmClient.chat(message=None, tools=self.tools)
+                if len(self.tools) > 0:
+                    res = await self.llmClient.chat(message=None, tools=self.tools)
+                else:
+                    res = await self.llmClient.chat(message=None)
                 tool_calls = res.choices[0].message.tool_calls if res.choices[0].message.tool_calls else None
             
             logger.info("回复结果")

@@ -21,10 +21,16 @@ from agents.explainAgent import ExplainAgent
 from agents.paperAgent import PaperAgent
 from agents.testAgent import TestAgent, Language, TestType
 from fastapi.middleware.cors import CORSMiddleware
-
+import json
 # 导入认证模块
 from auth import auth_router, get_current_active_user, User
 from utils.conversation_logger import ConversationLogger
+from models.practice_history import PracticeHistory
+from datetime import datetime
+from models.review_plan import ReviewPlanManager
+from agents.reviewplanAgent import ReviewPlanAgent
+
+
 
 load_dotenv()
 api_key = os.getenv("DASHSCOPE_API_KEY")
@@ -40,6 +46,15 @@ os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
 
 PROJECT_ROOT = os.getenv("PROJECT_PATH")
 
+# 初始化对话记录器
+PROJECT_PATH = os.getenv("PROJECT_PATH", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+conversation_logger = ConversationLogger(PROJECT_PATH)
+
+# 实例化习题历史记录管理器
+practice_history = PracticeHistory(PROJECT_ROOT)
+
+# 初始化复习计划管理器
+review_plan_manager = ReviewPlanManager(PROJECT_ROOT)
 
 
 # 全局变量
@@ -51,10 +66,17 @@ explainAgent = ExplainAgent(api_key, base_url, model)
 question_agent = questionAgent(api_key, base_url, model)
 paper_agent = PaperAgent()
 test_agent = TestAgent(api_key, base_url, model)
+review_plan_agent = ReviewPlanAgent(conversation_logger, practice_history, review_plan_manager)
 
-agents = [agent, umlAgent, explainAgent, question_agent, paper_agent, test_agent]
+agents = [agent, umlAgent, explainAgent, question_agent, paper_agent, test_agent, review_plan_agent]
 
-
+type2agent = {
+    "UmlAgent": umlAgent,
+    "ExplainAgent": explainAgent,
+    "QuestionAgent": question_agent,
+    "PaperAgent": paper_agent,
+    "TestAgent": test_agent,
+}
 # 保存全局事件循环引用
 agent_loop = None
 
@@ -232,9 +254,6 @@ app.mount("/static", StaticFiles(directory=UML_STATIC_DIR), name="static")
 # 集成认证路由
 app.include_router(auth_router)
 
-# 初始化对话记录器
-PROJECT_PATH = os.getenv("PROJECT_PATH", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-conversation_logger = ConversationLogger(PROJECT_PATH)
 
 @app.get("/")
 async def root():
@@ -293,6 +312,7 @@ async def chat(
 async def create_or_update_index(
     files: List[UploadFile] = File(...),
     name: str = Form(...),
+    is_update: bool = Form(False),  # 添加此参数，表示是否为更新操作
     current_user: User = Depends(get_current_active_user)
 ):
     """
@@ -301,6 +321,7 @@ async def create_or_update_index(
     Args:
         files (List[UploadFile]): 上传的文件列表
         name (str): 知识库名称
+        is_update (bool): 是否为更新操作，True表示向现有知识库添加文件
         current_user (User): 当前登录的用户
         
     Returns:
@@ -313,8 +334,19 @@ async def create_or_update_index(
     if not name:
         raise HTTPException(status_code=400, detail="请提供知识库名称")
 
-    # 创建知识库目录
+    # 检查知识库是否存在
     kb_dir = os.path.join(KNOWLEDGE_DIR, name)
+    is_existing_kb = os.path.exists(kb_dir)
+    
+    # 如果是更新操作但知识库不存在，则返回错误
+    if is_update and not is_existing_kb:
+        return {"status": "error", "message": f"知识库 {name} 不存在，无法更新"}
+    
+    # 如果是创建操作但知识库已存在，则返回错误（除非明确指定为更新操作）
+    if not is_update and is_existing_kb:
+        return {"status": "error", "message": f"知识库 {name} 已存在，请使用更新功能或选择其他名称"}
+
+    # 创建知识库目录（如果不存在）
     os.makedirs(kb_dir, exist_ok=True)
     
     # 保存上传的文件
@@ -323,6 +355,15 @@ async def create_or_update_index(
         for file in files:
             print(f"处理文件: {file.filename}")
             dest_path = os.path.join(kb_dir, file.filename)
+            
+            # 检查文件是否已存在
+            if os.path.exists(dest_path) and is_update:
+                # 更新模式下，为重名文件添加时间戳
+                file_name, file_ext = os.path.splitext(file.filename)
+                timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                new_filename = f"{file_name}_{timestamp}{file_ext}"
+                dest_path = os.path.join(kb_dir, new_filename)
+                print(f"文件已存在，重命名为: {new_filename}")
             
             # 读取上传的文件内容并写入目标位置
             with open(dest_path, "wb") as buffer:
@@ -333,16 +374,16 @@ async def create_or_update_index(
             print(f"已保存文件到: {dest_path}")
 
     except Exception as e:
-        return {"status": "error", "message": f"创建知识库时出错: {str(e)}"}
+        return {"status": "error", "message": f"保存文件时出错: {str(e)}"}
     
-    
+    operation_type = "更新" if is_update else "创建"
     
     try:
         # 等待结果
         await run_in_agent_thread(agent.create_index, files_dir=kb_dir, label=name, timeout=120)
-        return {"status": "success", "message": f"成功创建/更新知识库: {name}，包含 {len(file_paths)} 个文件"}
+        return {"status": "success", "message": f"成功{operation_type}知识库: {name}，添加了 {len(file_paths)} 个文件"}
     except Exception as e:
-        return {"status": "error", "message": f"创建向量存储时出错: {str(e)}"}
+        return {"status": "error", "message": f"{operation_type}向量存储时出错: {str(e)}"}
 
 @app.get("/list_knowledge_bases")
 async def list_knowledge_bases(current_user: User = Depends(get_current_active_user)):
@@ -393,6 +434,7 @@ async def delete_knowledge_base(
 @app.post("/update_label")
 async def update_label(
     name: str = Form(...),
+    agent_type_list: List[str] = Form(...),
     current_user: User = Depends(get_current_active_user)
 ):
     """
@@ -425,7 +467,8 @@ async def update_label(
 
     try:
         # 等待结果
-        for agt in agents:
+        for agent_type in agent_type_list:
+            agt = type2agent[agent_type]
             await run_in_agent_thread(agt.update_label, name, timeout=30)
 
         return {"status": "success", "message": f"成功更新知识库标签: {name}"}
@@ -482,7 +525,6 @@ async def generate_uml(
 async def explain(
     query: str = Form(...),
     style_label: ExplainStyle = Form(...),
-    output_file_name: str = Form(None),
     bing_search: bool = Form(False),
     current_user: User = Depends(get_current_active_user)
 ):
@@ -495,12 +537,11 @@ async def explain(
             explainAgent.chat,
             query,                  # 第一个参数
             style_label.value,      # 第二个参数
-            output_file_name,       # 第三个参数
             bing_search,            # 第四个参数
             timeout=120             # timeout是run_in_agent_thread的参数
         )
-        if output_file_name:
-            response['download_url'] = f"/download/{output_file_name}" 
+
+
 
         # 记录对话
         conversation_logger.log_conversation(
@@ -510,8 +551,14 @@ async def explain(
             query=f"解释概念（{style_label.value}风格）：{query}",
             response=response
         )
-        
-        return response
+
+        if response['status'] == 'success':
+            return response
+        else:
+            return {
+                "status": "error",
+                "message": response['message']
+            }
     except Exception as e:
         print(f"获取解释时出错: {e}")
         return {"status": "error", "message": f"获取解释时出错: {str(e)}"}
@@ -522,22 +569,16 @@ async def explain_question(
     current_user: User = Depends(get_current_active_user)
 ):
     """
-    解释用户输入的题目
-    message:
-        {{
-            "explanation": "详细解释",
-            "key_points": ["考察重点1", "考察重点2", ...],
-            "reference_answer": "参考答案"
-        }}
+    解析软件工程习题
     """
     try:
+        # 调用Agent解析题目
         response = await run_in_agent_thread(
-            question_agent.explain_question, 
-            question=question,
-            timeout=300
+            question_agent.explain_question,
+            question
         )
         
-        # 记录对话
+        # 记录Agent响应
         conversation_logger.log_conversation(
             user_id=current_user.id,
             username=current_user.username,
@@ -545,17 +586,50 @@ async def explain_question(
             query=f"解释题目：{question}",
             response=response
         )
+
+        return response
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.post("/questionAgent/quick_answer")
+async def quick_answer(
+    question: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    快速回答软件工程相关问题
+    """
+    try:
+        # 记录用户对话
+        conversation_logger = ConversationLogger(current_user.username)
+        conversation_id = await conversation_logger.log_conversation(
+            agent_type="QuestionAgent",
+            user_input=question,
+            action="quick_answer"
+        )
+        
+        # 调用Agent快速回答问题
+        response = await run_in_agent_thread(
+            question_agent.quick_answer,
+            question
+        )
+        
+        # 记录Agent响应
+        await conversation_logger.update_conversation(
+            conversation_id=conversation_id,
+            agent_response=json.dumps(response)
+        )
         
         return response
     except Exception as e:
-        print(f"解释题目时出错: {e}")
-        return {"status": "error", "message": f"解释题目时出错: {str(e)}"}
+        return {"status": "error", "message": str(e)}
 
 @app.post("/questionAgent/generate_practice_set")
 async def generate_practice_set(
     topics: str = Form(...),
     num_questions: int = Form(5),
     difficulty: QuestionDifficulty = Form(QuestionDifficulty.MEDIUM),
+    type: QuestionType = Form(QuestionType.MULTIPLE_CHOICE),
     current_user: User = Depends(get_current_active_user)
 ):
     """
@@ -589,7 +663,14 @@ async def generate_practice_set(
         topic_list = [topic.strip() for topic in topics.split(",") if topic.strip()]
         
         # 调用question_agent时传入处理后的列表
-        result = await question_agent.generate_practice_set(topic_list, num_questions, difficulty)
+        result = await run_in_agent_thread(
+            question_agent.generate_practice_set,
+            topic_list,
+            num_questions,
+            difficulty,
+            type
+        )
+
         # 记录对话
         conversation_logger.log_conversation(
             user_id=current_user.id,
@@ -801,9 +882,9 @@ async def download_file(
         filename=filename
     )
 
-@app.get("/conversations")
+@app.post("/conversations")
 async def get_user_conversations(
-    limit: Optional[int] = Query(20, description="返回的最大记录数"),
+    limit: Optional[int] = Query(None, description="返回的最大记录数"),
     agent_type: Optional[str] = Query(None, description="可选的Agent类型过滤条件"),
     current_user: User = Depends(get_current_active_user)
 ):
@@ -984,6 +1065,7 @@ async def generate_test_cases(
         print(f"生成测试用例时出错: {e}")
         return {"status": "error", "message": f"生成测试用例时出错: {str(e)}"}
 
+
 @app.post("/testAgent/analyze_code_for_testability")
 async def analyze_code_for_testability(
     code: str = Form(...),
@@ -1026,83 +1108,6 @@ async def analyze_code_for_testability(
         print(f"分析代码可测试性时出错: {e}")
         return {"status": "error", "message": f"分析代码可测试性时出错: {str(e)}"}
 
-@app.post("/testAgent/explain_testing_concept")
-async def explain_testing_concept(
-    concept: str = Form(...),
-    current_user: User = Depends(get_current_active_user)
-):
-    """
-    解释软件测试相关概念
-    
-    Args:
-        concept: 要解释的测试概念
-        current_user: 当前登录的用户
-        
-    Returns:
-        dict: 包含概念解释的字典
-    """
-    if not test_agent or not agent_ready.is_set():
-        return {"status": "error", "message": "Test Agent 尚未准备好，请稍后再试"}
-    
-    try:
-        response = await run_in_agent_thread(
-            test_agent.explain_testing_concept,
-            concept=concept,
-            timeout=300
-        )
-        
-        # 记录对话
-        conversation_logger.log_conversation(
-            user_id=current_user.id,
-            username=current_user.username,
-            agent_type="TestAgent",
-            query=f"解释测试概念：{concept}",
-            response=response
-        )
-        
-        return response
-    except Exception as e:
-        print(f"解释测试概念时出错: {e}")
-        return {"status": "error", "message": f"解释测试概念时出错: {str(e)}"}
-
-@app.post("/testAgent/generate_test_plan")
-async def generate_test_plan(
-    project_description: str = Form(...),
-    current_user: User = Depends(get_current_active_user)
-):
-    """
-    根据项目描述生成测试计划
-    
-    Args:
-        project_description: 项目描述
-        current_user: 当前登录的用户
-        
-    Returns:
-        dict: 包含测试计划的字典
-    """
-    if not test_agent or not agent_ready.is_set():
-        return {"status": "error", "message": "Test Agent 尚未准备好，请稍后再试"}
-    
-    try:
-        response = await run_in_agent_thread(
-            test_agent.generate_test_plan,
-            project_description=project_description,
-            timeout=300
-        )
-        
-        # 记录对话
-        conversation_logger.log_conversation(
-            user_id=current_user.id,
-            username=current_user.username,
-            agent_type="TestAgent",
-            query=f"生成测试计划：{project_description[:50]}...",
-            response=response
-        )
-        
-        return response
-    except Exception as e:
-        print(f"生成测试计划时出错: {e}")
-        return {"status": "error", "message": f"生成测试计划时出错: {str(e)}"}
 
 @app.post("/testAgent/evaluate_test_coverage")
 async def evaluate_test_coverage(
@@ -1149,13 +1154,592 @@ async def evaluate_test_coverage(
         print(f"评估测试覆盖率时出错: {e}")
         return {"status": "error", "message": f"评估测试覆盖率时出错: {str(e)}"}
 
+
+@app.post("/questionAgent/download_practice_set")
+async def download_practice_set(
+    practice_set: str = Form(...),  # 题目集的JSON字符串
+    format: str = Form("pdf"),  # 下载格式，支持pdf或docx
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    下载习题集
+    
+    Args:
+        practice_set: 题目集的JSON字符串
+        format: 下载格式，支持pdf或docx
+        current_user: 当前登录的用户
+        
+    Returns:
+        FileResponse: 文件下载响应
+    """
+    try:
+        # 解析JSON字符串
+        try:
+            practice_set_data = json.loads(practice_set)
+        except json.JSONDecodeError:
+            return {
+                "status": "error",
+                "message": "输入数据格式错误，请确保是有效的JSON格式"
+            }
+        
+        # 生成唯一的文件名
+        timestamp = int(time.time())
+        filename = f"practice_set_{current_user.id}_{timestamp}"
+        
+        # 文件路径
+        file_path = os.path.join(DOCS_DIR, f"{filename}.{format}")
+        
+        # 根据格式生成文件
+        if format == "pdf":
+            await generate_pdf(practice_set_data, file_path)
+        elif format == "docx":
+            await generate_docx(practice_set_data, file_path)
+        else:
+            return {"status": "error", "message": "不支持的格式，只支持pdf或docx"}
+        
+        # 返回文件下载响应
+        return FileResponse(
+            file_path,
+            media_type='application/octet-stream',
+            filename=f"练习题集_{timestamp}.{format}"
+        )
+    except Exception as e:
+        return {"status": "error", "message": f"下载习题集时出错: {str(e)}"}
+
+async def generate_pdf(practice_set_data, file_path):
+    """
+    生成PDF文件
+    
+    Args:
+        practice_set_data: 习题集数据
+        file_path: 输出文件路径
+    """
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.lib.units import inch
+    
+    # 注册中文字体
+    try:
+        # 尝试注册思源黑体（Source Han Sans）
+        pdfmetrics.registerFont(TTFont('SourceHanSans', 'SourceHanSans-Regular.ttf'))
+        font_name = 'SourceHanSans'
+    except:
+        try:
+            # 尝试注册宋体
+            pdfmetrics.registerFont(TTFont('SimSun', 'SimSun.ttf'))
+            font_name = 'SimSun'
+        except:
+            # 如果都失败，使用默认字体
+            font_name = 'Helvetica'
+            print("警告：未能加载中文字体，文档可能无法正确显示中文")
+    
+    # 创建自定义样式
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(
+        name='ChineseTitle',
+        fontName=font_name,
+        fontSize=18,
+        leading=22,
+        alignment=1  # 居中
+    ))
+    styles.add(ParagraphStyle(
+        name='ChineseHeading',
+        fontName=font_name,
+        fontSize=14,
+        leading=18
+    ))
+    styles.add(ParagraphStyle(
+        name='ChineseNormal',
+        fontName=font_name,
+        fontSize=10,
+        leading=14
+    ))
+    
+    # 创建PDF文档
+    doc = SimpleDocTemplate(
+        file_path,
+        pagesize=A4,
+        rightMargin=72,
+        leftMargin=72,
+        topMargin=72,
+        bottomMargin=72
+    )
+    
+    # 创建内容列表
+    content = []
+    
+    # 添加标题
+    title = Paragraph("软件工程练习题集", styles['ChineseTitle'])
+    content.append(title)
+    content.append(Spacer(1, 12))
+    
+    # 添加题目
+    for i, question in enumerate(practice_set_data.get("questions", [])):
+        # 题目标题
+        question_title = Paragraph(f"{i+1}. {question.get('question', '未提供题目')}", styles['ChineseHeading'])
+        content.append(question_title)
+        content.append(Spacer(1, 6))
+        
+        # 选项（如果有）
+        if question.get("options"):
+            for j, option in enumerate(question["options"]):
+                option_text = Paragraph(f"{option}", styles['ChineseNormal'])
+                content.append(option_text)
+            content.append(Spacer(1, 6))
+        
+        # 参考答案
+        answer_title = Paragraph("参考答案:", styles['ChineseHeading'])
+        content.append(answer_title)
+        answer_text = Paragraph(question.get("reference_answer", "未提供答案"), styles['ChineseNormal'])
+        content.append(answer_text)
+        content.append(Spacer(1, 6))
+        
+        # 解析
+        if question.get("analysis"):
+            analysis_title = Paragraph("解析:", styles['ChineseHeading'])
+            content.append(analysis_title)
+            analysis_text = Paragraph(question.get("analysis", ""), styles['ChineseNormal'])
+            content.append(analysis_text)
+        
+        content.append(Spacer(1, 12))
+    
+    # 构建PDF
+    doc.build(content)
+
+async def generate_docx(practice_set_data, file_path):
+    """
+    生成DOCX文件
+    
+    Args:
+        practice_set_data: 习题集数据
+        file_path: 输出文件路径
+    """
+    try:
+        from docx import Document
+        from docx.shared import Pt, RGBColor
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        
+        # 创建文档
+        doc = Document()
+        
+        # 设置中文字体
+        chinese_font = '宋体'  # 或者使用'微软雅黑', '黑体'等
+        
+        # 添加标题
+        title = doc.add_heading("软件工程练习题集", 0)
+        for run in title.runs:
+            run.font.name = chinese_font
+        
+        # 添加题目
+        for i, question in enumerate(practice_set_data.get("questions", [])):
+            # 题目标题
+            heading = doc.add_heading(f"{i+1}. {question.get('question', '未提供题目')}", 2)
+            for run in heading.runs:
+                run.font.name = chinese_font
+            
+            # 选项（如果有）
+            if question.get("options"):
+                for option in question["options"]:
+                    para = doc.add_paragraph(option)
+                    for run in para.runs:
+                        run.font.name = chinese_font
+            
+            # 参考答案
+            answer_para = doc.add_paragraph()
+            answer_run = answer_para.add_run("参考答案:")
+            answer_run.bold = True
+            answer_run.font.name = chinese_font
+            
+            answer_text = doc.add_paragraph(question.get("reference_answer", "未提供答案"))
+            for run in answer_text.runs:
+                run.font.name = chinese_font
+            
+            # 解析
+            if question.get("analysis"):
+                analysis_para = doc.add_paragraph()
+                analysis_run = analysis_para.add_run("解析:")
+                analysis_run.bold = True
+                analysis_run.font.name = chinese_font
+                
+                analysis_text = doc.add_paragraph(question.get("analysis", ""))
+                for run in analysis_text.runs:
+                    run.font.name = chinese_font
+            
+            # 添加分隔线
+            doc.add_paragraph("-----------------------------------")
+        
+        # 保存文档
+        doc.save(file_path)
+    except ImportError:
+        # 如果python-docx不可用，使用简单的文本文件
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write("软件工程练习题集\n\n")
+            
+            for i, question in enumerate(practice_set_data.get("questions", [])):
+                f.write(f"{i+1}. {question.get('question', '未提供题目')}\n\n")
+                
+                if question.get("options"):
+                    for j, option in enumerate(question["options"]):
+                        f.write(f"{option}\n")
+                    f.write("\n")
+                
+                f.write(f"参考答案: {question.get('reference_answer', '未提供答案')}\n\n")
+                
+                if question.get("analysis"):
+                    f.write(f"解析: {question.get('analysis', '')}\n\n")
+                
+                f.write("-----------------------------------\n\n")
+
+@app.get("/questionAgent/practice_history")
+async def get_practice_history(
+    limit: Optional[int] = Query(20, description="返回的最大记录数"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    获取用户的习题历史记录
+    
+    Args:
+        limit: 返回的最大记录数，默认20条
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 包含用户习题历史记录的字典
+    """
+    try:
+        history = practice_history.get_user_history(current_user.id, limit)
+        
+        return {
+            "status": "success",
+            "history": history,
+            "total": len(history)
+        }
+    except Exception as e:
+        print(f"获取用户习题历史记录时出错: {e}")
+        return {"status": "error", "message": f"获取用户习题历史记录时出错: {str(e)}"}
+
+@app.post("/questionAgent/save_practice_history")
+async def save_practice_history(
+    topics: str = Form(...),
+    count: int = Form(...),
+    difficulty: str = Form(...),
+    type: str = Form(...),
+    questions: str = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    保存习题历史记录
+    
+    Args:
+        topics: 知识点列表，逗号分隔
+        count: 题目数量
+        difficulty: 难度
+        type: 题目类型
+        questions: 习题JSON字符串
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 操作结果
+    """
+    try:
+        # 解析JSON字符串
+        try:
+            questions_data = json.loads(questions)
+        except json.JSONDecodeError:
+            return {
+                "status": "error",
+                "message": "输入数据格式错误，请确保是有效的JSON格式"
+            }
+        
+        # 创建历史记录项
+        item_id = f"{current_user.id}_{int(time.time())}"
+        topics_list = [topic.strip() for topic in topics.split(",") if topic.strip()]
+        
+        history_item = {
+            "id": item_id,
+            "user_id": current_user.id,
+            "date": datetime.now().isoformat(),
+            "topics": topics_list,
+            "count": count,
+            "difficulty": difficulty,
+            "type": type,
+            "questions": questions_data
+        }
+        
+        # 添加到历史记录
+        success = practice_history.add_history_item(current_user.id, history_item)
+        
+        if success:
+            return {"status": "success", "message": "习题历史记录保存成功", "id": item_id}
+        else:
+            return {"status": "error", "message": "习题历史记录保存失败"}
+    except Exception as e:
+        print(f"保存习题历史记录时出错: {e}")
+        return {"status": "error", "message": f"保存习题历史记录时出错: {str(e)}"}
+
+@app.delete("/questionAgent/practice_history/{item_id}")
+async def delete_practice_history(
+    item_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    删除习题历史记录
+    
+    Args:
+        item_id: 历史记录项ID
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 操作结果
+    """
+    try:
+        # 验证item_id是否属于当前用户
+        user_id_str = item_id.split('_')[0]
+        try:
+            item_user_id = int(user_id_str)
+            if item_user_id != current_user.id:
+                return {"status": "error", "message": "无权删除此历史记录"}
+        except ValueError:
+            return {"status": "error", "message": "无效的历史记录ID"}
+            
+        # 删除历史记录
+        success = practice_history.delete_history_item(current_user.id, item_id)
+        
+        if success:
+            return {"status": "success", "message": "历史记录删除成功"}
+        else:
+            return {"status": "error", "message": "历史记录删除失败，可能记录不存在"}
+    except Exception as e:
+        print(f"删除习题历史记录时出错: {e}")
+        return {"status": "error", "message": f"删除习题历史记录时出错: {str(e)}"}
+
+@app.delete("/questionAgent/practice_history")
+async def clear_practice_history(
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    清空用户的习题历史记录
+    
+    Args:
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 操作结果
+    """
+    try:
+        success = practice_history.clear_user_history(current_user.id)
+        
+        if success:
+            return {"status": "success", "message": "历史记录清空成功"}
+        else:
+            return {"status": "error", "message": "历史记录清空失败"}
+    except Exception as e:
+        print(f"清空习题历史记录时出错: {e}")
+        return {"status": "error", "message": f"清空习题历史记录时出错: {str(e)}"}
+
+@app.get("/questionAgent/practice_history/{item_id}")
+async def get_practice_history_item(
+    item_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    获取特定的习题历史记录
+    
+    Args:
+        item_id: 历史记录项ID
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 包含历史记录项的字典
+    """
+    try:
+        # 验证item_id是否属于当前用户
+        user_id_str = item_id.split('_')[0]
+        try:
+            item_user_id = int(user_id_str)
+            if item_user_id != current_user.id:
+                return {"status": "error", "message": "无权查看此历史记录"}
+        except ValueError:
+            return {"status": "error", "message": "无效的历史记录ID"}
+            
+        # 获取所有历史记录
+        history = practice_history.get_user_history(current_user.id)
+        
+        # 查找特定记录
+        item = next((item for item in history if item.get('id') == item_id), None)
+        
+        if item:
+            return {"status": "success", "data": item}
+        else:
+            return {"status": "error", "message": "未找到指定的历史记录"}
+    except Exception as e:
+        print(f"获取习题历史记录项时出错: {e}")
+        return {"status": "error", "message": f"获取习题历史记录项时出错: {str(e)}"}
+
+@app.post("/reviewAgent/generate_plan")
+async def generate_review_plan(
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    生成复习计划
+    
+    基于用户的历史对话记录、学习笔记和错题集，生成个性化复习计划
+    
+    Args:
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 包含复习计划的字典
+    """
+    try:
+        response = await run_in_agent_thread(
+            review_plan_agent.generate_review_plan,
+            user_id=current_user.id,
+            username=current_user.username,
+            timeout=300
+        )
+        
+        # 记录对话
+        conversation_logger.log_conversation(
+            user_id=current_user.id,
+            username=current_user.username,
+            agent_type="ReviewPlanAgent",
+            query="生成复习计划",
+            response=response
+        )
+        
+        return response
+    except Exception as e:
+        print(f"生成复习计划时出错: {e}")
+        return {"status": "error", "message": f"生成复习计划时出错: {str(e)}"}
+
+@app.get("/reviewAgent/plans")
+async def get_user_plans(
+    limit: Optional[int] = Query(None, description="返回的最大记录数"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    获取用户的复习计划列表
+    
+    Args:
+        limit: 返回的最大记录数
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 包含用户复习计划列表的字典
+    """
+    try:
+        plans = review_plan_manager.get_user_plans(current_user.id, limit)
+        
+        return {
+            "status": "success",
+            "plans": plans,
+            "total": len(plans)
+        }
+    except Exception as e:
+        print(f"获取用户复习计划列表时出错: {e}")
+        return {"status": "error", "message": f"获取用户复习计划列表时出错: {str(e)}"}
+
+@app.get("/reviewAgent/plans/{plan_id}")
+async def get_plan_detail(
+    plan_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    获取复习计划详情
+    
+    Args:
+        plan_id: 计划ID
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 包含复习计划详情的字典
+    """
+    try:
+        plan = review_plan_manager.get_plan_by_id(current_user.id, plan_id)
+        
+        if not plan:
+            return {"status": "error", "message": "未找到指定的复习计划"}
+        
+        return {
+            "status": "success",
+            "plan": plan
+        }
+    except Exception as e:
+        print(f"获取复习计划详情时出错: {e}")
+        return {"status": "error", "message": f"获取复习计划详情时出错: {str(e)}"}
+
+@app.put("/reviewAgent/plans/{plan_id}/steps/{step_id}")
+async def update_step_status(
+    plan_id: str,
+    step_id: str,
+    is_completed: bool = Form(...),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    更新复习计划步骤状态
+    
+    Args:
+        plan_id: 计划ID
+        step_id: 步骤ID
+        is_completed: 是否已完成
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 操作结果
+    """
+    try:
+        success = review_plan_manager.update_step_status(
+            current_user.id, 
+            plan_id, 
+            step_id, 
+            is_completed
+        )
+        
+        if success:
+            return {"status": "success", "message": "步骤状态更新成功"}
+        else:
+            return {"status": "error", "message": "步骤状态更新失败，可能计划或步骤不存在"}
+    except Exception as e:
+        print(f"更新复习计划步骤状态时出错: {e}")
+        return {"status": "error", "message": f"更新复习计划步骤状态时出错: {str(e)}"}
+
+@app.delete("/reviewAgent/plans/{plan_id}")
+async def delete_plan(
+    plan_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    删除复习计划
+    
+    Args:
+        plan_id: 计划ID
+        current_user: 当前登录的用户
+        
+    Returns:
+        dict: 操作结果
+    """
+    try:
+        success = review_plan_manager.delete_plan(current_user.id, plan_id)
+        
+        if success:
+            return {"status": "success", "message": "复习计划删除成功"}
+        else:
+            return {"status": "error", "message": "复习计划删除失败，可能计划不存在"}
+    except Exception as e:
+        print(f"删除复习计划时出错: {e}")
+        return {"status": "error", "message": f"删除复习计划时出错: {str(e)}"}
+
 if __name__ == "__main__":
     # 启动后台线程
     agent_thread = threading.Thread(target=background_start_agent, daemon=True)
     agent_thread.start()
     
     # 等待agent初始化
-    timeout = 30  # 30秒超时
+    timeout = 120  
     start_time = time.time()
     while not agent_ready.is_set() and time.time() - start_time < timeout:
         time.sleep(0.5)

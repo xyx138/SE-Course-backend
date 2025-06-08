@@ -14,6 +14,10 @@ PROJECT_PATH = os.getenv('PROJECT_PATH')
 class QuestionType(str, Enum):
     """题目类型枚举"""
     MULTIPLE_CHOICE = "选择题"
+    FILL_IN_THE_BLANK = "填空题"
+    TRUE_OR_FALSE = "判断题"
+    SHORT_ANSWER = "简答题"
+
 
 class QuestionDifficulty(str, Enum):
     """题目难度枚举"""
@@ -26,7 +30,7 @@ class questionAgent(Agent):
     
     def __init__(self, api_key: str, base_url: str, model: str = None, label: str = None) -> None:
         super().__init__(api_key, base_url, model, label, [
-            "memory"
+            # "memory"
         ])
         
     def get_system_prompt(self) -> str:
@@ -202,7 +206,7 @@ class questionAgent(Agent):
         try:
             response = await self.chat(prompt)
             # 解析JSON响应
-            grading_result = response
+            grading_result = json.loads(response)
             grading_result["status"] = "success"
             return grading_result
         except Exception as e:
@@ -282,7 +286,8 @@ class questionAgent(Agent):
         self,
         topics: List[str],
         num_questions: int = 5,
-        difficulty: QuestionDifficulty = QuestionDifficulty.MEDIUM
+        difficulty: QuestionDifficulty = QuestionDifficulty.MEDIUM,
+        question_type: QuestionType = QuestionType.MULTIPLE_CHOICE
     ) -> Dict:
         """
         生成练习题集
@@ -291,11 +296,11 @@ class questionAgent(Agent):
             topics: 知识点列表
             num_questions: 题目数量
             difficulty: 题目难度
-            
+            question_type: 题目类型
         Returns:
             Dict: 包含题目集的字典
         """
-        prompt = f"""请生成一套包含{num_questions}道软件工程练习题，难度为{difficulty.value}。
+        prompt = f"""请生成一套包含{num_questions}道软件工程练习题，难度为{difficulty.value}，题型为{question_type.value}。
 
         知识点范围：
         {', '.join(topics)}
@@ -306,7 +311,10 @@ class questionAgent(Agent):
         3. 难度递进，由易到难
         4. 覆盖所有给定的知识点
 
-        输出格式：
+        
+        你只需要返回一个json字符串,包含以下内容，不要输出多余的前后缀：
+
+
         {{
             "questions": [
                 {{
@@ -330,18 +338,62 @@ class questionAgent(Agent):
             }}
         }}
 
-        请确保输出是有效的JSON格式。"""
+        """
 
         try:
             response = await self.chat(prompt)
-            # 解析JSON响应
-            practice_set = response
-            practice_set["status"] = "success"
-            return practice_set
+            return response
         except Exception as e:
             return {
                 "status": "error",
                 "message": f"生成练习题集时出错: {str(e)}"
+            }
+
+    async def quick_answer(
+        self,
+        question: str
+    ) -> Dict:
+        """
+        快速回答软件工程相关问题
+        
+        Args:
+            question: 用户提问的问题
+            
+        Returns:
+            Dict: 包含回答的字典
+        """
+        prompt = f"""请针对以下软件工程相关问题提供简洁明了的回答：
+
+        问题：
+        {question}
+
+        要求：
+        1. 回答应该准确、专业，但简洁明了
+        2. 如果涉及多种观点或方法，请简要列出
+        3. 可以适当引用经典理论或最佳实践
+        4. 如果问题不够明确，可以提供最可能的解释
+        5. 回答中应包含关键概念的简短解释
+
+        你只需要返回一个json字符串,包含以下内容，不要输出多余的前后缀：
+        
+        {{
+            "answer": "详细回答",
+            "key_concepts": ["关键概念1", "关键概念2", ...],
+            "references": ["参考资料1", "参考资料2", ...] (可选)
+        }}
+
+       """
+
+        try:
+            response = await self.chat(prompt)
+            # 解析JSON响应
+            answer_data = json.loads(response)
+            answer_data["status"] = "success"
+            return answer_data
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"回答问题时出错: {str(e)}"
             }
 
 

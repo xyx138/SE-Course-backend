@@ -23,7 +23,14 @@ os.makedirs(os.path.join(PROJECT_PATH, "data"), exist_ok=True)
 
 # 数据库连接
 SQLALCHEMY_DATABASE_URL = f"sqlite:///{DB_PATH}"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    pool_size=20,         # 增加基本连接池大小
+    max_overflow=30,      # 增加溢出连接数
+    pool_timeout=60,      # 增加超时时间
+    pool_pre_ping=True,   # 使用前检查连接是否有效
+    pool_recycle=3600     # 每小时回收连接
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -100,6 +107,6 @@ def get_db():
     """获取数据库会话"""
     db = SessionLocal()
     try:
-        return db
+        yield db  # 使用yield而不是return
     finally:
         db.close() 
