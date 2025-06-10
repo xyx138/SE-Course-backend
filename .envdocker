@@ -1,0 +1,5 @@
+# 项目路径 
+PROJECT_PATH=/app
+# qwen api 
+DASHSCOPE_API_KEY=sk-04ad7df6b8834216953810687cd763de
+DASHSCOPE_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1 

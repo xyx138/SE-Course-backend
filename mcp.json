@@ -1,7 +1,7 @@
 {
     "mcpServers": {
         "filesystem": {
-            "command": "npx.cmd",
+            "command": "npx",
             "args": [
               "-y",
               "@modelcontextprotocol/server-filesystem",
@@ -12,11 +12,11 @@
             "command": "uv",
             "args": [
                 "run",
-                "${PROJECT_PATH}\\src\\utils\\uml_mcp_server.py"
+                "${PROJECT_PATH}/src/utils/uml_mcp_server.py"
             ]
         },
         "bingcn": {
-            "command": "npx.cmd",
+            "command": "npx",
             "args": [
               "-y",
               "bing-cn-mcp"
@@ -27,13 +27,13 @@
             "args": [ "mcp-server-fetch"]
         },
         "memory": {
-            "command": "npx.cmd",
+            "command": "npx",
             "args": [
                 "-y",
                 "@modelcontextprotocol/server-memory"
             ],
             "env": {
-                "MEMORY_FILE_PATH": "${PROJECT_PATH}\\static\\memory.json"
+                "MEMORY_FILE_PATH": "${PROJECT_PATH}/static/memory.json"
             }
         },
         "time": {
@@ -46,7 +46,7 @@
                 "tool",
                 "run",
                 "arxiv-mcp-server",
-                "--storage-path", "${PROJECT_PATH}\\static\\papers"
+                "--storage-path", "${PROJECT_PATH}/static/papers"
             ]
         }
     }

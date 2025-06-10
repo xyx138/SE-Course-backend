@@ -18,6 +18,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 PROJECT_PATH = os.getenv("PROJECT_PATH")
+# 从环境变量获取UML服务器域名，默认为localhost
+PLANTUML_HOST = os.getenv("PLANTUML_HOST", "localhost")
+PLANTUML_PORT = os.getenv("PLANTUML_PORT", "8080")
 
 
 # 添加src目录到Python路径
@@ -269,8 +272,9 @@ def generate_uml_image(uml_code, diagram_type=None, output_dir=None):
         # 编码UML代码
         encoded = plantuml_encode(uml_code)
         
-        # 构建URL，添加~1前缀
-        url = f"http://localhost:8080/png/{encoded}"
+        # 构建URL，使用环境变量中配置的域名和端口
+        url = f"http://{PLANTUML_HOST}:{PLANTUML_PORT}/png/{encoded}"
+        logger.info(f"使用PlantUML服务: {PLANTUML_HOST}:{PLANTUML_PORT}")
         
         # 确保输出目录存在
         os.makedirs(output_dir, exist_ok=True)

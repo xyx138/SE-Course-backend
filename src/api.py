@@ -1,5 +1,5 @@
 from agents.agent import Agent 
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter, Body, Depends, BackgroundTasks, Query, Request
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter, Body, Depends, BackgroundTasks, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from dotenv import load_dotenv
 import threading
@@ -1763,6 +1763,10 @@ async def read_root():
 async def serve_spa(request: Request, full_path: str):
     print(f"处理请求路径: {full_path}")
     
+    # 对于 .well-known 开头的路径，直接返回 404
+    if full_path.startswith(".well-known/"):
+        return Response(status_code=404)
+    
     # 检查是否是直接静态文件请求（如 favicon.ico）
     if "." in full_path.split("/")[-1]:
         file_path = os.path.join(DIST_DIR, full_path)
@@ -1801,4 +1805,4 @@ if __name__ == "__main__":
         print("警告: Agent初始化超时，API服务可能无法正常工作")
     
     # 禁用uvicorn的热重载功能
-    uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=8001, reload=False)

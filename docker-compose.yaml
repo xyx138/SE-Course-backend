@@ -1,0 +1,75 @@
+services:
+  plantuml:
+    image: plantuml/plantuml-server:jetty
+    container_name: plantuml-server
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    container_name: se-course-backend
+
+                        
+
+    volumes:
+      - backend_data:/app/data
+      - knowledge_base:/app/knowledge_base
+      - vector_store:/app/VectorStore
+      - conversations:/app/conversations
+      - static:/app/static
+      - practice_history:/app/practice_history
+      - review_plans:/app/review_plans
+      - dist:/app/dist
+      - logs:/app/logs
+    environment:
+      - NODE_ENV=production
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+      - PLANTUML_HOST=plantuml
+      - PLANTUML_PORT=8080
+
+    ports:
+      - "8000:8000"
+    depends_on:
+      - plantuml
+    restart: unless-stopped
+    networks:
+      - app-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    tty: true
+    stdin_open: true
+
+networks:
+  app-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  backend_data:
+  knowledge_base:
+  vector_store:
+  conversations:
+  static:
+  practice_history:
+  review_plans:
+  dist:
+  logs:
